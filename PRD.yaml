@@ -1,0 +1,1417 @@
+# distill-cli — PRD for ralphy autonomous loop
+#
+# Run with:
+#   ralphy --yaml PRD.yaml --model opus --max-iterations 100
+#
+# See DESIGN.md for the full specification. See .ralphy/config.yaml for rules.
+# Any conflict the agent encounters should be logged to CONFLICTS.md at the
+# repo root (the agent continues without stopping the loop).
+
+tasks:
+    # =========================================================================
+    # Phase 1 — Skeleton and schemas (the foundation)
+    # =========================================================================
+
+    - title: "Project skeleton"
+      completed: false
+      description: |
+          Create the initial project structure per DESIGN.md §16 (Tooling and
+          conventions) and §17 (Repo layout).
+
+          Read: DESIGN.md §16 and §17.
+
+          Create these files (all at latest versions — see rules):
+          - package.json (name: distill-cli, version: 0.1.0, type: module,
+            license: AGPL-3.0-or-later, engines.node: ">=24",
+            bin: { distill: "./bin/distill" }, imports: { "#/*": "./src/*" },
+            pnpm.onlyBuiltDependencies allowlist per §16.1)
+          - tsconfig.json per §16.2 (NodeNext module resolution, ES2023 lib
+            only, strict + the extra checks listed, #/* path alias)
+          - biome.json per §16.3 (exact formatter/linter config shown)
+          - vitest.config.ts per §16.4 (environment: 'node', include patterns,
+            tsconfigPaths plugin)
+          - lefthook.yml per §16.5 (biome + type-check on pre-commit)
+          - .nvmrc containing the literal string "lts/*"
+          - .gitignore covering: node_modules/, dist/, .env, .env.*, .DS_Store,
+            *.log, pnpm-debug.log, .ralphy-worktrees/, .ralphy-sandboxes/,
+            test-results/, playwright-report/, local.db, CONFLICTS.md
+          - LICENSE — fetch the canonical AGPL-3.0-or-later text (do not
+            improvise)
+          - bin/distill — placeholder shebang script `#!/usr/bin/env node`
+            that imports dist/cli.js (will be populated later)
+          - src/cli.ts — empty stub that exits 0
+          - test/setup.ts — empty file for Vitest setup
+
+          Install runtime and dev dependencies via `pnpm add`:
+          - Runtime: zod, linkedom, file-type, is-svg, playwright
+          - Dev: typescript, @biomejs/biome, vitest, vite-tsconfig-paths,
+            lefthook, @types/node, tsx
+
+          Add pnpm scripts to package.json per §16.7 (check, type-check, lint,
+          lint:fix, format, format:check, test, test:watch, test:e2e, build,
+          eval, eval:compare).
+
+          Run `pnpm install` and `pnpm lefthook install` to activate hooks.
+
+          Acceptance:
+          - `pnpm install` completes without errors
+          - `pnpm type-check` passes (no source files to check yet is fine)
+          - `pnpm test` runs (zero tests found is acceptable at this stage)
+          - `pnpm biome check .` passes
+          - Directory structure matches DESIGN.md §17
+
+    - title: "Zod error schema and error code catalog"
+      completed: false
+      description: |
+          Create src/schema/errors.ts defining the ValidationError /
+          DistillError class hierarchy and the full error code catalog.
+
+          Read: DESIGN.md §10 (Exit codes and error codes), §4.4 (error shape).
+
+          Requirements:
+          - Export a TypeScript enum or const union `ErrorCode` listing every
+            code from §10.2 (all 25 codes across the 5 exit code categories)
+          - Export a `DistillError` class with fields: code (ErrorCode),
+            message (string), hint (string | undefined),
+            retryable (boolean), retry_with (string[]),
+            received (unknown, optional), exit_code (0-5)
+          - Export a `DistillErrorSchema` Zod schema matching the JSON error
+            shape from §4.4 (for output serialization)
+          - Export helper constructors for common error classes (e.g.,
+            `invalidUrl(url, hint)`, `botBlocked(status, hint)`) that set
+            retryable and retry_with correctly per §10.2 and DESIGN.md §4.4
+          - Every error code maps to its correct exit code per §10.1
+          - Export a mapping `ERROR_CODE_EXIT_CODES` from ErrorCode to exit
+            code number
+
+          Acceptance:
+          - Unit tests in src/schema/errors.test.ts cover:
+            - Every ErrorCode has a defined exit code mapping
+            - DistillError serializes to the schema shape from §4.4
+            - Helper constructors set retryable/retry_with correctly for
+              representative codes (BOT_BLOCKED, TIMEOUT, INVALID_URL)
+            - The retryable:true codes are the strict transient set per §4.4
+          - `pnpm test src/schema/errors.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Zod input schema"
+      completed: false
+      description: |
+          Create src/schema/input.ts defining the canonical ExtractInput Zod
+          schema.
+
+          Read: DESIGN.md §3 (Input contract), §3.2 (flag list), §5 (Actions
+          DSL), §11 (schema introspection generated from Zod).
+
+          Requirements:
+          - Export `ExtractInputSchema` covering every field from §3.2. Each
+            flag listed in §3.2 must have a corresponding field in the schema
+            with the correct type and default
+          - Export `ActionSchema` as a discriminated union on `type`, covering
+            every action from §5.1 (wait, click, scroll, fill, press, dismiss)
+            with the correct required/optional fields per §5.2
+          - Every enum-valued field (format, scroll target, wait target,
+            download-images-format) must reject invalid values
+          - The schema is strict — unknown keys are rejected
+          - Export a `resolveInput` function that merges parsed JSON input with
+            individual flag values, applying the precedence from §3.1 (positional
+            URL wins, then flags, then JSON)
+          - Export a JSON Schema document derived from ExtractInputSchema via
+            `zod-to-json-schema` (install that package) for the --help --json
+            introspection consumer
+
+          Acceptance:
+          - Unit tests in src/schema/input.test.ts cover:
+            - Valid minimal input (just url)
+            - Valid full input with every field set
+            - Rejects unknown fields
+            - Every enum field rejects invalid values
+            - ActionSchema validates each action type from §5.1
+            - ActionSchema rejects actions specifying neither selector nor
+              role+name (per §5.2 targeting rule)
+            - resolveInput applies precedence correctly
+          - `pnpm test src/schema/input.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Zod output schema"
+      completed: false
+      description: |
+          Create src/schema/output.ts defining the ExtractOutput Zod schema.
+
+          Read: DESIGN.md §4 (Output contract), §4.1 (minimal default),
+          §4.2 (field groups), §4.3 (block representation — internal only),
+          §4.4 (error shape).
+
+          Requirements:
+          - Export `ExtractOutputSchema` matching the minimal default shape
+            from §4.1: _meta, url, final_url, title, content.markdown,
+            word_count, extraction.{strategy, selector, confidence, archetype},
+            warnings
+          - Export optional field group schemas that can be composed on top:
+            MetaGroupSchema (description, author, published, language,
+            site_name), LinksGroupSchema, ImagesGroupSchema,
+            ContentHtmlSchema, ContentTextSchema, ExtractionMetricsSchema,
+            ExtractionTraceSchema, ActionsTraceSchema
+          - Export an enum for extraction.strategy ("explicit" | "selector" |
+            "heuristic") and extraction.confidence ("high" | "medium" | "low")
+            and extraction.archetype ("article-blog" | "docs" | "news")
+          - Export a `composeOutputSchema(fields: string[])` function that
+            returns a Zod schema including only the requested field groups
+            (per the `--fields` additive opt-in from §4.2)
+          - Export a JSON Schema document derived from ExtractOutputSchema via
+            zod-to-json-schema for schema introspection
+          - Include schema_version "1.0.0" as a literal in _meta
+
+          Acceptance:
+          - Unit tests in src/schema/output.test.ts cover:
+            - Minimal default output validates
+            - Every field group can be added via composeOutputSchema
+            - `composeOutputSchema(['all'])` includes every group
+            - schema_version is always "1.0.0"
+            - Invalid confidence/strategy/archetype values are rejected
+          - `pnpm test src/schema/output.test.ts` passes
+          - `pnpm check` passes
+
+    # =========================================================================
+    # Phase 2 — Security layer
+    # =========================================================================
+
+    - title: "URL validation"
+      completed: false
+      description: |
+          Create src/security/url.ts implementing all URL validation rules.
+
+          Read: DESIGN.md §9.1 (URL validation), §10.2 (INVALID_URL,
+          INVALID_SCHEME, PRIVATE_NETWORK_BLOCKED error codes).
+
+          Requirements:
+          - Export `validateUrl(raw: string, opts?: { allowPrivateNetwork?: boolean })`
+            returning a parsed URL or throwing a typed DistillError from
+            src/schema/errors.ts
+          - Implement every rule from §9.1: strict parse, http/https only,
+            control-char rejection (ASCII < 0x20), private/loopback rejection
+            (when not allowed), 2048-char limit
+          - Check literal IP addresses in the hostname for private/loopback
+            ranges (10/8, 172.16/12, 192.168/16, 127/8, ::1, fc00::/7, etc.).
+            Do NOT perform DNS lookups in the validator — runtime DNS
+            resolution is the fetch layer's concern
+          - Use Node's built-in URL class, not a third-party parser
+
+          Acceptance:
+          - Unit tests in src/security/url.test.ts cover:
+            - Valid http:// and https:// URLs pass
+            - Malformed URLs throw INVALID_URL
+            - file://, javascript:, data:, ftp:// URLs throw INVALID_SCHEME
+            - URLs over 2048 chars throw INVALID_URL
+            - URLs containing control chars throw INVALID_URL
+            - Private IPs (127.0.0.1, 10.x.x.x, 192.168.x.x) throw
+              PRIVATE_NETWORK_BLOCKED by default
+            - Private IPs pass when allowPrivateNetwork is true
+            - IPv6 loopback (::1) is rejected
+          - `pnpm test src/security/url.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Path validation"
+      completed: false
+      description: |
+          Create src/security/path.ts implementing path validation for
+          --download-images and other path inputs.
+
+          Read: DESIGN.md §9.2 (Path validation), §10.2 (INVALID_PATH).
+
+          Requirements:
+          - Export `validateOutputPath(raw: string)` returning a canonicalized
+            absolute path or throwing DistillError with code INVALID_PATH
+          - Implement every rule from §9.2: canonicalize (use
+            node:path.resolve), reject `..` escapes from the intended base,
+            reject absolute paths pointing into /etc, /proc, /sys, /dev, and
+            other sensitive locations
+          - Export `ensureSafeDir(path: string)` that creates the directory
+            with safe permissions (0755, not world-writable) if it doesn't
+            exist
+          - Use node:path and node:fs/promises, no third-party path libraries
+
+          Acceptance:
+          - Unit tests in src/security/path.test.ts cover:
+            - Valid relative paths resolve correctly
+            - Valid absolute paths in user home resolve correctly
+            - Paths containing `..` that escape cwd throw INVALID_PATH
+            - Paths pointing into /etc, /proc, /sys, /dev throw INVALID_PATH
+            - ensureSafeDir creates a missing directory
+            - ensureSafeDir is a no-op if directory exists
+          - `pnpm test src/security/path.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Cookies file permission check and header redaction"
+      completed: false
+      description: |
+          Create src/security/cookies.ts for cookies-file validation and
+          header redaction.
+
+          Read: DESIGN.md §9.3 (Cookies file), §10.2 (INVALID_COOKIES_FILE).
+
+          Requirements:
+          - Export `loadCookiesFile(path: string)` that:
+            - fstats the file, rejects if mode is broader than 0600 on Unix
+              with INVALID_COOKIES_FILE (hint: "chmod 600 <file>")
+            - parses the Netscape cookie jar format
+            - returns an array of Cookie objects ({ domain, path, name, value,
+              expires?, secure?, httpOnly? })
+          - Export `redactHeaders(headers: Record<string, string>)` that
+            returns a copy with any header matching
+            /^(cookie|authorization|x-api-key|x-auth)/i replaced with
+            "<redacted>"
+          - Export `redactForErrors(received: unknown)` that recursively
+            redacts the same header patterns in any nested object
+          - On Windows (process.platform === 'win32'), skip the file mode check
+            with a warning (Windows ACLs differ from Unix modes)
+
+          Acceptance:
+          - Unit tests in src/security/cookies.test.ts cover:
+            - Cookie file with mode 0600 loads successfully
+            - Cookie file with mode 0644 throws INVALID_COOKIES_FILE
+            - Malformed cookie jar throws INVALID_COOKIES_FILE
+            - redactHeaders replaces Cookie, Authorization, X-API-Key,
+              X-Auth-Token values
+            - redactHeaders preserves other headers verbatim
+            - Tests create temp files with chmod to verify mode enforcement
+          - `pnpm test src/security/cookies.test.ts` passes
+          - `pnpm check` passes
+
+    # =========================================================================
+    # Phase 3 — Fetch and cache layer
+    # =========================================================================
+
+    - title: "Raw HTTP fetch with retries"
+      completed: false
+      description: |
+          Create src/extractor/fetch.ts implementing the raw HTTP fetch layer
+          without cache integration yet.
+
+          Read: DESIGN.md §2 (Rendering strategy), §10.2 (network/auth error
+          codes).
+
+          Requirements:
+          - Export `fetchRaw(url, opts)` where opts includes headers, cookies,
+            userAgent, timeout, maxSize, retries
+          - Use Node's built-in fetch (global), not axios or got
+          - Follow redirects (up to 20 hops), reporting the final_url
+          - Handle gzip/brotli transparently (native fetch does this)
+          - Default realistic User-Agent string (recent Chrome) unless
+            overridden
+          - Retry on 429/503, respecting the Retry-After header (cap at 30s
+            between retries, cap total retries at opts.retries default 2)
+          - Max response body size enforced via reading the body in chunks
+            and throwing TOO_LARGE if exceeded
+          - Timeout enforced via AbortController
+          - Map network errors to DistillError codes: DNS failure →
+            DNS_FAILURE, ECONNREFUSED → CONNECTION_REFUSED, AbortError →
+            TIMEOUT, 4xx → HTTP_4XX, 5xx → HTTP_5XX, TLS errors → TLS_ERROR
+          - Detect bot-block heuristics (403/429 with cf-ray header, or
+            common bot-block body patterns) and map to BOT_BLOCKED with
+            retry_with suggestions ["--render", "--cookies", "--user-agent"]
+          - Return { finalUrl, status, headers, body (Buffer), contentType }
+
+          Do NOT integrate caching in this task — that is the next task.
+
+          Acceptance:
+          - Unit tests in src/extractor/fetch.test.ts using a local
+            node:http server serving fixtures cover:
+            - 200 OK returns body and headers
+            - 404 throws HTTP_4XX
+            - 503 retried then eventually throws HTTP_5XX
+            - 429 with Retry-After respected
+            - AbortController timeout throws TIMEOUT
+            - Max size exceeded throws TOO_LARGE
+            - Redirects followed, final_url set correctly
+            - 403 with cf-ray header throws BOT_BLOCKED with retry_with
+          - `pnpm test src/extractor/fetch.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "SQLite cache layer"
+      completed: false
+      description: |
+          Create src/cache/sqlite.ts implementing the HTTP response cache.
+
+          Read: DESIGN.md §8 (Caching).
+
+          Requirements:
+          - Use node:sqlite (built-in). Import as `import sqlite from
+            'node:sqlite'`. Do NOT use better-sqlite3 or any other driver.
+          - Enable WAL mode for concurrent writers via
+            `db.exec('PRAGMA journal_mode=WAL')`
+          - Schema: cache(key TEXT PRIMARY KEY, status INT, headers TEXT,
+            body BLOB, fetched_at INT, expires_at INT, content_type TEXT)
+          - Key function: `cacheKey(url, normalizedHeaders, hasAuth)` —
+            hash of (url + normalized header subset). If hasAuth is true, the
+            key function may be irrelevant (see next task's auth-bypass rule)
+          - Export: `get(key)`, `set(key, entry, ttl)`, `delete(pattern)`,
+            `list(filter)`, `clear(opts)`, `migrate()` (creates schema)
+          - Cache directory resolution: XDG_CACHE_HOME/distill/http-cache.sqlite
+            on Linux, ~/Library/Caches/distill/http-cache.sqlite on macOS, use
+            the standard node pattern for XDG_CACHE_HOME detection
+          - TTL default 1 hour. Respect shorter Cache-Control max-age if
+            present in the stored headers
+          - The cache module itself does NOT enforce the "never cache auth
+            responses" rule — that happens at the fetch integration layer
+            (next task)
+
+          Acceptance:
+          - Unit tests in src/cache/sqlite.test.ts use a temp dir for the
+            database file, cover:
+            - migrate() creates the schema
+            - set/get round-trip
+            - Expired entries not returned by get()
+            - delete(pattern) removes matching keys
+            - list() returns summary of entries
+            - clear({olderThan}) prunes old entries
+            - Two concurrent writers via two Database instances don't corrupt
+              (WAL mode test)
+          - `pnpm test src/cache/sqlite.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Cache integration into fetch + auth-bypass invariant"
+      completed: false
+      description: |
+          Integrate the SQLite cache into the fetch layer with the critical
+          "never cache authenticated responses" invariant.
+
+          Read: DESIGN.md §8 (Caching) — specifically the "Rule" paragraph
+          about cookies and Authorization headers.
+
+          Requirements:
+          - Create src/extractor/cached-fetch.ts that wraps fetchRaw with
+            cache logic
+          - Export `cachedFetch(url, opts)` with signature matching fetchRaw
+            plus opts: { noCache?, refresh?, maxAge? }
+          - Flow:
+            1. If opts.cookies is set OR opts.headers contains an
+               Authorization header (case-insensitive), BYPASS the cache
+               entirely — do not read from it, do not write to it. Proceed
+               directly to fetchRaw.
+            2. Otherwise, compute cache key, check cache, return cached entry
+               if present and not expired (respecting opts.maxAge override and
+               opts.noCache read-bypass)
+            3. On miss or refresh, call fetchRaw, store result, return it
+          - The auth-bypass rule MUST have a dedicated unit test that fails
+            loudly if broken. Explicitly named e.g.
+            "never caches authenticated responses"
+          - _meta.from_cache field returned with each call (boolean)
+
+          Acceptance:
+          - Unit tests in src/extractor/cached-fetch.test.ts use a temp SQLite
+            DB + a local http test server, covering:
+            - Cache miss → fetch → cache hit on second call
+            - Cookies present → never reads from cache, never writes to cache
+              (the invariant test)
+            - Authorization header present → never reads from cache, never
+              writes to cache
+            - --no-cache bypasses read but still writes
+            - --refresh forces fetch and updates cache
+            - Expired entries trigger refetch
+            - Cache-Control: max-age=60 shortens TTL below default
+          - `pnpm test src/extractor/cached-fetch.test.ts` passes
+          - `pnpm check` passes
+
+    # =========================================================================
+    # Phase 4 — Extraction core
+    # =========================================================================
+
+    - title: "Block-based DOM representation"
+      completed: false
+      description: |
+          Create src/extractor/blocks.ts implementing the block-based DOM
+          representation that is the internal canonical form.
+
+          Read: DESIGN.md §4.3 (Block-based internal representation), §6
+          (Extraction strategy — the overall context).
+
+          Requirements:
+          - Use linkedom (already installed) for HTML parsing. Import via
+            `import { parseHTML } from 'linkedom'`. Do NOT use jsdom, cheerio,
+            or any other parser.
+          - Define a `Block` type with fields:
+            - id: string (stable across runs)
+            - text: string
+            - tagPath: string[] (e.g., ["html", "body", "main", "article",
+              "p"])
+            - headingLevel: number | null (1-6 for h1-h6, null otherwise)
+            - linkDensity: number (0-1, links text length / total text length)
+            - wordCount: number
+            - imageRefs: { alt: string, src: string }[]
+            - visibility: "visible" | "hidden" (based on style/hidden attr)
+            - childBlockIds: string[]
+          - Export `domToBlocks(html: string)` that parses HTML via linkedom
+            and returns an ordered array of Block objects representing the
+            content structure
+          - The block extraction traverses the DOM in document order. Text
+            nodes are aggregated into the enclosing block-level element.
+            Inline elements (span, a, em, strong, etc.) contribute to the
+            parent block's text but do not create new blocks.
+          - Block-level elements that DO create new blocks: p, h1-h6, li, pre,
+            blockquote, table, td, th, figure, article, section, div (only if
+            it contains direct text), main, header, footer, aside, nav
+          - Images found inside a block are recorded in that block's imageRefs
+
+          Acceptance:
+          - Unit tests in src/extractor/blocks.test.ts cover:
+            - Simple <article><h1>T</h1><p>body</p></article> produces two
+              blocks with correct headingLevel and tagPath
+            - Nested lists produce correct parent/child relationships
+            - Links contribute to linkDensity correctly
+            - Hidden elements (style="display:none" or hidden attr) are
+              marked visibility: "hidden"
+            - Image references are captured in imageRefs
+            - Inline elements don't create separate blocks
+          - `pnpm test src/extractor/blocks.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Chrome stripping pre-processor"
+      completed: false
+      description: |
+          Create src/extractor/strip-chrome.ts that removes navigation,
+          headers, footers, asides, scripts, styles, and common boilerplate
+          from a DOM tree before block extraction.
+
+          Read: DESIGN.md §6 step 5 (always strip obvious chrome first).
+
+          Requirements:
+          - Export `stripChrome(document: Document)` that mutates the document
+            in place, removing:
+            - <script>, <style>, <noscript>
+            - <nav>, <header> (but only if it's a site header, not an article
+              header — see note below), <footer>, <aside>
+            - Elements with role="navigation", role="banner",
+              role="contentinfo", role="complementary"
+            - Cookie consent banners: elements with id or class matching
+              /cookie|consent|gdpr|ccpa/i that are positioned near the top of
+              the body
+            - Social share widgets: elements with class matching
+              /share|social|tweet|facebook|linkedin/i that contain only links
+            - Advertising: elements with class/id matching /\bads?\b|sponsor/i
+          - Caution on <header>: do not strip <header> elements that are
+            descendants of <article> or <section> with role="article", since
+            those contain article metadata. Strip only body-level headers.
+          - Caution on <aside>: do not strip <aside> if the page is classified
+            as "docs" (docs sidebars are often navigation but can contain
+            content). For this task, strip aggressively and let the archetype
+            classifier task override this later if needed.
+          - Return stripping metadata: { stripped: { nav: number, header: number,
+            footer: number, aside: number, scripts: number, styles: number,
+            ads: number, cookie_banners: number, social_widgets: number } }
+            so the extraction trace can report what was removed
+
+          Acceptance:
+          - Unit tests in src/extractor/strip-chrome.test.ts cover:
+            - <nav> elements are removed
+            - body-level <header> is removed
+            - <article><header>...</header></article> is preserved
+            - <script> and <style> are removed
+            - Cookie banner divs are removed
+            - Social share widgets are removed
+            - Ad containers are removed
+            - Stripping metadata counts are accurate
+          - `pnpm test src/extractor/strip-chrome.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Selector-chain extraction strategy"
+      completed: false
+      description: |
+          Create src/extractor/strategies/selector-chain.ts implementing the
+          fixed selector chain strategy.
+
+          Read: DESIGN.md §6 steps 1-3 (selector chain), §6.1 (confidence
+          rubric).
+
+          Requirements:
+          - Export `extractWithSelectorChain(document: Document)` returning
+            { strategy: "selector", selector: string, blocks: Block[] } on
+            success, or null if no selector in the chain matched
+          - The chain order: `main` → `article` → `[role="main"]` →
+            `#content` → `.post-content` → `.entry-content`
+          - For each selector, if it matches, extract blocks from that subtree
+            using the blocks module and return immediately
+          - If --selector is passed explicitly, use it and label strategy as
+            "explicit" (this path is separately handled in the command layer;
+            this module only handles the chain)
+          - Does NOT apply chrome stripping — that is a separate step that
+            runs before this strategy
+
+          Acceptance:
+          - Unit tests in src/extractor/strategies/selector-chain.test.ts
+            cover:
+            - <main> in document → extracts from main
+            - No <main> but <article> → extracts from article
+            - No main or article, has [role="main"] → extracts from that
+            - None of the selectors match → returns null
+            - Multiple <article> elements: extracts from the first
+          - `pnpm test src/extractor/strategies/selector-chain.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Heuristic fallback extraction strategy"
+      completed: false
+      description: |
+          Create src/extractor/strategies/heuristic.ts implementing the
+          Readability-style scoring fallback.
+
+          Read: DESIGN.md §6 step 4 (heuristic fallback).
+
+          Requirements:
+          - Export `extractWithHeuristic(document: Document)` returning
+            { strategy: "heuristic", selector: null, blocks: Block[] } or
+            throwing ALL_STRATEGIES_FAILED if no plausible content found
+          - Algorithm: score each candidate root (body's direct children)
+            by:
+            - Total text length (positive weight)
+            - Paragraph count (positive)
+            - Heading count (positive)
+            - Link density (negative — boilerplate is link-heavy)
+            - Text-to-HTML ratio (positive)
+          - Pick the highest-scoring subtree
+          - Extract blocks from the selected subtree
+          - If top score is below a minimum threshold, throw
+            ALL_STRATEGIES_FAILED with hint about the page being mostly
+            boilerplate
+          - This is a BASIC scoring pass, not a full Readability implementation.
+            Document that it's intentionally naive and can be improved later.
+
+          Acceptance:
+          - Unit tests in src/extractor/strategies/heuristic.test.ts cover:
+            - A page with one content-dense div and several nav-heavy divs
+              selects the content div
+            - A page with no content-bearing elements throws
+              ALL_STRATEGIES_FAILED
+            - Link density correctly penalizes link lists
+            - Heading presence boosts the score
+          - `pnpm test src/extractor/strategies/heuristic.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Quality scoring and confidence rubric"
+      completed: false
+      description: |
+          Create src/extractor/confidence.ts implementing the confidence
+          classification.
+
+          Read: DESIGN.md §4.1 (extraction.confidence is an enum),
+          §6.1 (confidence rubric).
+
+          Requirements:
+          - Export `computeConfidence(strategy, blocks, context)` returning
+            "high" | "medium" | "low" per the rubric in §6.1
+          - High: explicit selector OR selector chain with strong quality
+            (word count > 500, link density < 0.3)
+          - Medium: selector chain with moderate quality
+          - Low: heuristic fallback OR marginal quality metrics
+          - Do NOT return a numeric score. Confidence is strictly the enum.
+          - Export `computeMetrics(blocks)` returning { text_length,
+            text_html_ratio, paragraphs, link_density } for the optional
+            --fields +extraction.metrics group (these are the raw observables,
+            separate from confidence)
+
+          Acceptance:
+          - Unit tests in src/extractor/confidence.test.ts cover:
+            - explicit strategy always → high
+            - selector strategy with 1000 words, low links → high
+            - selector strategy with 300 words → medium
+            - heuristic strategy → low
+            - computeMetrics returns correct counts for known block arrays
+          - `pnpm test src/extractor/confidence.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Page archetype classifier"
+      completed: false
+      description: |
+          Create src/extractor/archetype.ts implementing the basic page
+          archetype classifier (article-blog | docs | news).
+
+          Read: DESIGN.md §4.1 (extraction.archetype field, v0.1.0 archetypes
+          are article-blog, docs, news).
+
+          Requirements:
+          - Export `classifyArchetype(document, url, blocks)` returning
+            "article-blog" | "docs" | "news"
+          - Heuristics (intentionally simple for v0.1.0):
+            - docs: URL path contains /docs/, /documentation/, /api/,
+              /reference/, or document has <aside> with table of contents, or
+              many code blocks relative to prose
+            - news: URL host matches common news domains (optional, can be
+              skipped for v0.1.0), or og:type is "article" AND published date
+              is within a few days of now, or schema.org NewsArticle
+            - article-blog: default fallback
+          - This is a best-effort classifier. It's okay if it gets some pages
+            wrong — the archetype field is informative, not behavior-changing
+            in v0.1.0.
+
+          Acceptance:
+          - Unit tests in src/extractor/archetype.test.ts cover:
+            - URL containing /docs/ → docs
+            - URL containing /api/ → docs
+            - Default fallback → article-blog
+            - Page with NewsArticle JSON-LD → news
+          - `pnpm test src/extractor/archetype.test.ts` passes
+          - `pnpm check` passes
+
+    # =========================================================================
+    # Phase 5 — Rendering (blocks → output views)
+    # =========================================================================
+
+    - title: "Markdown renderer from blocks"
+      completed: false
+      description: |
+          Create src/extractor/markdown.ts implementing markdown rendering
+          from the block representation.
+
+          Read: DESIGN.md §4.1 (content.markdown is the default view),
+          §4.3 (block-based internal representation).
+
+          Requirements:
+          - Export `renderMarkdown(blocks: Block[], opts?: { imagePathMap?:
+            Map<string, string>, format?: "markdown" | "wikilinks" })`
+            returning a markdown string
+          - Render each block type appropriately:
+            - heading blocks → `#` through `######`
+            - paragraph blocks → text with two-newline separators
+            - list items → `- ` or `1. ` with proper indentation for
+              nesting
+            - code blocks → fenced with triple backticks, language hint if
+              detectable from class="language-xxx"
+            - blockquote → `> ` prefix
+            - table → GitHub-flavored markdown tables
+            - figure/image → `![alt](src)` or `![[filename|alt]]` in wikilinks
+              mode
+          - Preserve inline emphasis, links, and code within text
+          - If imagePathMap is provided, rewrite image src values to local
+            paths (key = original URL, value = local path)
+          - Handle empty blocks gracefully (omit)
+
+          Acceptance:
+          - Unit tests in src/extractor/markdown.test.ts cover:
+            - Heading blocks render with correct `#` count
+            - Paragraphs render with double-newline separation
+            - Nested lists render correctly
+            - Code blocks render with language hints
+            - Images render as ![alt](src) by default
+            - Images render as ![[filename|alt]] in wikilinks mode
+            - imagePathMap rewrites image URLs to local paths
+            - Tables render in GFM format
+          - `pnpm test src/extractor/markdown.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "HTML and text view renderers"
+      completed: false
+      description: |
+          Create src/extractor/html.ts and src/extractor/text.ts implementing
+          the HTML and plain text views from the block representation.
+
+          Read: DESIGN.md §4.1, §4.2 (+content.html and +content.text opt-in
+          groups), §4.3 (block representation).
+
+          Requirements for src/extractor/html.ts:
+          - Export `renderHtml(blocks: Block[])` returning a cleaned HTML
+            string that reconstructs the article as semantic HTML
+          - Use the simplest reasonable HTML: <article> root, <h1>-<h6>,
+            <p>, <ul>/<ol>/<li>, <pre><code>, <blockquote>, <table>, <img>
+          - Strip all presentational attributes (style, class, id, data-*)
+          - Preserve href on <a> and src/alt on <img>
+
+          Requirements for src/extractor/text.ts:
+          - Export `renderText(blocks: Block[])` returning plain text with
+            double-newline paragraph separators, no formatting, no links,
+            no image references
+
+          Acceptance:
+          - Unit tests in src/extractor/html.test.ts cover basic structure
+            preservation and attribute stripping
+          - Unit tests in src/extractor/text.test.ts cover paragraph
+            separation and formatting removal
+          - `pnpm test src/extractor/html.test.ts src/extractor/text.test.ts`
+            passes
+          - `pnpm check` passes
+
+    # =========================================================================
+    # Phase 6 — Images
+    # =========================================================================
+
+    - title: "Image metadata extraction"
+      completed: false
+      description: |
+          Create src/images/extract.ts implementing image metadata
+          extraction from blocks.
+
+          Read: DESIGN.md §7.1 (default behavior — no flag), §4.2 (+images
+          field group shape).
+
+          Requirements:
+          - Export `extractImageMetadata(blocks: Block[], baseUrl: string)`
+            returning `Array<{ alt: string, src: string }>` with absolute URLs
+          - Resolve relative image URLs against baseUrl
+          - Resolve `//example.com/img.jpg` to `https://example.com/img.jpg`
+          - Deduplicate images by absolute URL (keep first occurrence)
+          - Filter out `data:` URIs (inline base64 — not downloadable, not
+            useful in the image list)
+          - Preserve order from block traversal
+
+          Acceptance:
+          - Unit tests in src/images/extract.test.ts cover:
+            - Relative URLs resolve against base
+            - Protocol-relative URLs resolve to https://
+            - Absolute URLs pass through
+            - data: URIs are filtered out
+            - Duplicates collapsed
+            - Empty alt preserved as empty string
+          - `pnpm test src/images/extract.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "Image downloading with chunked MD5 content-addressing"
+      completed: false
+      description: |
+          Create src/images/hash.ts, src/images/filename.ts, and
+          src/images/download.ts implementing the full image download pipeline
+          with content-addressed filenames.
+
+          Read: DESIGN.md §7.2 (with --download-images), §7.2's extension
+          detection priority.
+
+          Requirements for src/images/hash.ts:
+          - Export `chunkedMd5(buffer: Buffer)` implementing the chunked MD5
+            strategy: hash 15KB from start + 15KB from middle + 15KB from end.
+            For buffers smaller than 45KB, hash the full buffer.
+          - Use node:crypto's createHash('md5')
+
+          Requirements for src/images/filename.ts:
+          - Export `generateFilename(buffer: Buffer, url: string)` returning
+            `<md5>.<ext>` per §7.2
+          - Extension detection priority:
+            1. `file-type` magic-byte sniffing (use the installed file-type
+               package) — authoritative
+            2. URL pathname extension (strip query string) — fallback
+            3. If file-type returns 'xml' or nothing, check with is-svg
+            4. Return null (skip with warning) if none resolve
+
+          Requirements for src/images/download.ts:
+          - Export `downloadImages(images, opts)` where opts includes:
+            { dir: string, maxSize: number, concurrency: number,
+              fetchFn: typeof fetchRaw, format: 'markdown' | 'wikilinks' }
+          - Download images concurrently (respecting concurrency, default 5)
+          - Content-addressed filenames via generateFilename
+          - Skip download if a file with the same filename already exists
+            (cross-run dedup)
+          - Skip images larger than maxSize with a warning in the result
+          - Return `{ downloads: Array<{ src, local_path, filename, bytes }>,
+            warnings: string[], pathMap: Map<string, string> }` where pathMap
+            maps original URL to local path for markdown rewriting
+          - Failed downloads return the original URL and a warning — do not
+            throw
+          - Inherit auth context: opts.fetchFn is called for each image, so
+            cookies/headers/user-agent propagate automatically
+
+          Acceptance:
+          - Unit tests cover all three modules:
+            - hash.test.ts: chunked MD5 produces expected hash, small buffer
+              edge case
+            - filename.test.ts: file-type detection, URL fallback, SVG
+              fallback, extensionless CDN URL
+            - download.test.ts (using local http server fixtures): parallel
+              downloads respect concurrency, maxSize enforces limit,
+              cross-run dedup skips existing file, failed downloads captured
+              in warnings, pathMap populated correctly
+          - `pnpm test src/images/` passes
+          - `pnpm check` passes
+
+    # =========================================================================
+    # Phase 7 — Extract command and features
+    # =========================================================================
+
+    - title: "distill extract command wiring"
+      completed: false
+      description: |
+          Create src/commands/extract.ts and wire it into src/cli.ts as the
+          main command implementing the full extract pipeline.
+
+          Read: DESIGN.md §2 (commands), §3 (input contract), §4 (output
+          contract), §6 (extraction strategy).
+
+          Requirements:
+          - Create src/commands/extract.ts exporting `runExtract(input:
+            ExtractInput)` that:
+            1. Validates the URL via src/security/url.ts
+            2. Calls cachedFetch with the resolved options
+            3. Parses HTML via linkedom
+            4. Runs stripChrome, collecting strip metadata
+            5. If input.selector is set → explicit strategy
+               Else → selector chain, then heuristic fallback
+            6. Extracts blocks from the selected subtree
+            7. Classifies archetype
+            8. Computes confidence
+            9. Renders markdown (and html/text only if requested via fields)
+            10. Returns the ExtractOutput-shaped result
+          - Create src/cli.ts that parses argv, routes subcommands (extract,
+            setup, doctor, cache), invokes runExtract, serializes the
+            result/error to stdout as JSON, exits with the correct code
+          - Use a minimal argument parser (either Node's built-in
+            util.parseArgs with experimental-flags, or install commander /
+            cac — pick the simplest option that supports subcommands and
+            type-safe parsing)
+          - Errors are caught at the top level, serialized to the error shape
+            from §4.4, and printed to stdout with the correct exit code
+          - bin/distill invokes dist/cli.js
+
+          Do NOT implement --fields, --input, --dry-run, prompt injection
+          tags, or --help --json in this task. Those are separate tasks.
+
+          Acceptance:
+          - Integration test in test/integration/extract.test.ts using a local
+            http server with a canonical HTML fixture:
+            - `runExtract({ url })` returns the minimal default output shape
+              per §4.1 with correct title, content.markdown, word_count,
+              extraction.strategy
+            - `runExtract({ url, selector: 'main' })` uses explicit strategy
+            - Errors are caught and serialized correctly
+          - `pnpm test test/integration/extract.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "--fields field-group resolver"
+      completed: false
+      description: |
+          Implement the --fields additive opt-in field group resolver in the
+          extract command.
+
+          Read: DESIGN.md §4.2 (Additive opt-in field groups), §3.2 (--fields
+          flag).
+
+          Requirements:
+          - Create src/extractor/fields.ts exporting `resolveFields(requested:
+            string[], result: FullExtractResult)` that produces the final
+            output object containing only the requested field groups plus
+            the always-included minimal default per §4.1
+          - Parse the --fields syntax: comma-separated with `+` prefix
+            (e.g., "+meta,+links,+images") or the `all` sentinel
+          - Group definitions match §4.2 exactly: +meta, +links, +images,
+            +content.html, +content.text, +extraction.metrics,
+            +extraction.trace, +actions_trace, all
+          - Reject unknown group names with INVALID_INPUT_JSON (or
+            INVALID_ARGUMENT)
+          - Wire resolveFields into runExtract so the final output respects
+            the requested fields
+
+          Acceptance:
+          - Unit tests in src/extractor/fields.test.ts cover:
+            - Default (no +groups) returns only minimal default fields
+            - +meta adds description/author/published/language/site_name
+            - +links adds links array
+            - +images adds images array
+            - +content.html adds content.html
+            - Multiple groups combine additively
+            - `all` sentinel includes every group
+            - Unknown group throws
+          - `pnpm test src/extractor/fields.test.ts` passes
+          - Integration test updates: extract with --fields +meta,+images
+            returns expected shape
+          - `pnpm check` passes
+
+    - title: "--input stdin/file JSON reader"
+      completed: false
+      description: |
+          Implement the --input flag for reading canonical JSON input from
+          stdin or a file.
+
+          Read: DESIGN.md §3.1 (Canonical JSON input via --input),
+          §3.3 (--dry-run).
+
+          Requirements:
+          - Create src/cli/input.ts exporting `readInput(args)` that handles:
+            - `--input -` → read stdin until EOF, parse as JSON
+            - `--input @file.json` → read file, parse as JSON
+            - `--input {...}` (inline) is NOT supported; only stdin or file
+          - Parsed JSON must validate against ExtractInputSchema
+            (src/schema/input.ts)
+          - Merge with individual flag values per §3.1 precedence: positional
+            URL wins; other flags override JSON fields
+          - Return the resolved canonical ExtractInput object
+          - Invalid JSON → INVALID_INPUT_JSON with the parse error as hint
+          - Missing file → INVALID_INPUT_JSON with path as hint
+          - Wire into the extract command
+
+          Acceptance:
+          - Unit tests in src/cli/input.test.ts cover:
+            - stdin input parses and merges
+            - @file input parses and merges
+            - Invalid JSON throws INVALID_INPUT_JSON
+            - Positional URL overrides url in JSON
+            - Individual flags override JSON fields
+            - JSON validating against ExtractInputSchema passes
+            - JSON with unknown fields rejected
+          - `pnpm test src/cli/input.test.ts` passes
+          - `pnpm check` passes
+
+    - title: "--dry-run canonical input echo"
+      completed: false
+      description: |
+          Implement --dry-run that resolves the canonical input and prints
+          it without performing any network action.
+
+          Read: DESIGN.md §3.3 (--dry-run semantics).
+
+          Requirements:
+          - In the extract command, if input.dryRun is true, skip fetch and
+            extraction entirely
+          - Echo the resolved canonical input as JSON to stdout
+          - Exit 0
+          - The output shape is the canonical input that would be used (the
+            result of merging flags + --input + positional URL)
+
+          Acceptance:
+          - Integration test: `distill extract <url> --dry-run --render` prints
+            the resolved input with `render: true` and does not hit the
+            network (verify by pointing to a bogus URL)
+          - `pnpm test` passes
+          - `pnpm check` passes
+
+    - title: "Prompt injection boundary tags"
+      completed: false
+      description: |
+          Implement the <distilled_content>...</distilled_content> wrapping
+          of content fields for prompt injection defense.
+
+          Read: DESIGN.md §9.5 (Prompt injection defense), §4.1 (content
+          fields are wrapped by default).
+
+          Requirements:
+          - In the extract command output serialization, wrap
+            content.markdown, content.text, and content.html values in
+            `<distilled_content>...</distilled_content>` tags by default
+          - Add a --raw-content flag to ExtractInputSchema (src/schema/input.ts
+            update — note this change but keep the schema update minimal)
+            that strips the wrapping
+          - Wrapping happens at the final output step, after rendering, not
+            during block processing
+          - Empty content is still wrapped (empty tags)
+
+          Acceptance:
+          - Unit tests cover:
+            - Default extract output has <distilled_content> tags around
+              content.markdown
+            - --raw-content strips the tags
+            - content.html and content.text are also wrapped when requested
+          - `pnpm test` passes
+          - `pnpm check` passes
+
+    - title: "--help --json schema introspection"
+      completed: false
+      description: |
+          Implement --help --json schema introspection for every command,
+          generated from the Zod schemas.
+
+          Read: DESIGN.md §11 (Schema introspection), §10 (exit codes and
+          error codes catalog).
+
+          Requirements:
+          - Create src/cli/help.ts exporting `renderHelpJson(command: string)`
+            that returns the shape from §11:
+            - name, tool_version, schema_version, summary, usage
+            - arguments, flags (each with name/type/default/description)
+            - input_schema (from ExtractInputSchema via zod-to-json-schema)
+            - output_schema (from ExtractOutputSchema via zod-to-json-schema)
+            - error_codes (list of every code from src/schema/errors.ts)
+            - exit_codes (from the ErrorCode → exit code mapping)
+          - Also export `renderHelpText(command)` for human-readable --help
+          - Wire `--help` and `--help --json` into the CLI router
+          - Every subcommand (extract, setup, doctor, cache) responds to both
+            flag forms
+          - A contract test verifies that every flag in the help output has a
+            corresponding field in ExtractInputSchema (no drift)
+
+          Acceptance:
+          - Unit tests cover:
+            - renderHelpJson('extract') returns the shape from §11
+            - error_codes list matches ErrorCode enum exactly
+            - input_schema is a valid JSON Schema
+            - Every flag in the output has a corresponding schema field
+              (contract test)
+          - Integration test: `distill extract --help --json` prints valid
+            JSON matching §11
+          - `pnpm test` passes
+          - `pnpm check` passes
+
+    # =========================================================================
+    # Phase 8 — Playwright and actions
+    # =========================================================================
+
+    - title: "Playwright renderer (--render)"
+      completed: false
+      description: |
+          Create src/extractor/render.ts implementing the Playwright-based
+          rendering path.
+
+          Read: DESIGN.md §2 (Rendering strategy), §14.2 (Playwright browser
+          install), §10.2 (BROWSER_NOT_INSTALLED, BROWSER_LAUNCH_FAILED).
+
+          Requirements:
+          - Export `renderWithPlaywright(url, opts)` returning
+            { finalUrl, html } where html is the fully-rendered DOM
+          - Use Playwright's chromium browser. Respect PLAYWRIGHT_BROWSERS_PATH.
+          - Launch flow:
+            1. Try to launch chromium. If the browser binary is missing (common
+               "Executable doesn't exist" error), throw BROWSER_NOT_INSTALLED
+               with retry_with: ["distill setup"]
+            2. If launch fails for other reasons (missing system libs), throw
+               BROWSER_LAUNCH_FAILED with a hint that identifies common missing
+               libs (libnss3, libatk-bridge, etc.) from the error message
+            3. Create a new context, navigate to url, wait for network idle
+               (with a 30s timeout)
+            4. Apply cookies and custom headers from opts (via context.setCookies
+               and context.setExtraHTTPHeaders)
+            5. Use a realistic User-Agent from opts or the default
+            6. Get page.content() as the HTML
+            7. Close the context and browser
+          - Always close the browser even on error (try/finally)
+          - On root + Linux, automatically add --no-sandbox to launch args
+            (detectable via process.getuid() === 0 on Linux)
+
+          Acceptance:
+          - Unit test (gated behind DISTILL_E2E=1 env var since it requires
+            the browser): launches chromium against a local http server
+            fixture and returns rendered HTML
+          - Unit test (always runs): mocks playwright.chromium.launch to throw
+            "Executable doesn't exist" and verifies BROWSER_NOT_INSTALLED is
+            thrown with correct retry_with
+          - `pnpm test` passes (non-e2e tier)
+          - `pnpm check` passes
+
+    - title: "Actions DSL executor"
+      completed: false
+      description: |
+          Create src/extractor/actions.ts implementing the --actions DSL
+          executor that runs browser actions before extraction.
+
+          Read: DESIGN.md §5 (Actions DSL), §10.2 (ACTION_* error codes).
+
+          Requirements:
+          - Export `executeActions(page: Page, actions: Action[])` returning
+            `{ trace: ActionTraceEntry[] }` where each entry records
+            { index, type, result: "ok" | "failed" | "skipped", error?,
+              elapsed_ms }
+          - Execute actions in order per §5.1:
+            - wait with selector: page.waitForSelector
+            - wait with for: page.waitForLoadState('networkidle' | 'load' |
+              'domcontentloaded')
+            - wait with ms: await setTimeout (capped at 10s)
+            - click with selector: page.click
+            - click with role+name: page.getByRole(role, {name}).click()
+            - scroll to bottom/top: page.evaluate for scrollTo
+            - scroll with selector: page.locator(sel).scrollIntoViewIfNeeded()
+            - fill with selector + value: page.fill
+            - press with key: page.keyboard.press
+            - dismiss with selector: page.click + catch (dismiss is
+              best-effort)
+          - Fail-fast: any non-optional action failure throws an
+            ACTION_SELECTOR_NOT_FOUND, ACTION_TIMEOUT, ACTION_INTERCEPTED, or
+            ACTION_INVALID error with the index and action type
+          - optional: true on an action → log as "skipped" in trace, continue
+          - Every wait has an implicit 30s ceiling even if ms is higher
+          - Wire into the render path: if input.actions is present,
+            executeActions runs after page load, before getting content
+
+          Acceptance:
+          - Unit tests (mock Page) cover:
+            - Action trace records timing and result correctly
+            - wait with ms is capped at 10s
+            - Failed non-optional action throws correct error code
+            - optional: true action skips gracefully
+            - Unknown action type throws ACTION_INVALID
+            - role+name targeting dispatched correctly
+          - `pnpm test` passes
+          - `pnpm check` passes
+
+    # =========================================================================
+    # Phase 9 — Other commands
+    # =========================================================================
+
+    - title: "distill setup command"
+      completed: false
+      description: |
+          Create src/commands/setup.ts implementing `distill setup` for
+          Playwright browser installation.
+
+          Read: DESIGN.md §14.2 (Playwright browser install).
+
+          Requirements:
+          - Export `runSetup(opts: { browser?: string, force?: boolean,
+              check?: boolean, json?: boolean })`
+          - Default browser is "chromium"
+          - `--check`: report installed browsers as JSON without installing
+          - `--force`: reinstall even if present
+          - `--browser chromium|firefox|webkit|all`: select browser(s)
+          - Runs `npx playwright install <browser>` under the hood via
+            node:child_process (execFile, not shell)
+          - Streams progress to stdout in text mode, or collects to a result
+            for JSON mode
+          - Respects PLAYWRIGHT_BROWSERS_PATH env var (passed through)
+          - Wire into CLI routing for `distill setup`
+
+          Acceptance:
+          - Unit test: mocks child_process to verify the correct playwright
+            install command is invoked
+          - Unit test: --check with a missing browser returns JSON indicating
+            missing, exit 0
+          - `pnpm test` passes
+          - `pnpm check` passes
+
+    - title: "distill doctor command"
+      completed: false
+      description: |
+          Create src/commands/doctor.ts implementing `distill doctor` health
+          check.
+
+          Read: DESIGN.md §14.3 (distill doctor health check list).
+
+          Requirements:
+          - Export `runDoctor(opts: { fix?: boolean, yes?: boolean,
+              json?: boolean })`
+          - Perform every check from §14.3, returning a structured report:
+            - node.version (meets >=24)
+            - playwright.installed (package present)
+            - playwright.browser.chromium.present (binary path exists)
+            - playwright.browser.chromium.launches (actually spawn with a
+              5s timeout, catch errors, regex stderr for known missing libs,
+              produce install hints)
+            - playwright.browser.version_match
+            - cache.dir.writable, cache.dir.free_space_mb (warn <500MB)
+            - network.dns_ok (resolves example.com)
+            - platform.tmpdir exists and writable
+            - platform.is_root (warn if root and no --no-sandbox env set)
+          - Default output format is JSON (this is an agent tool)
+          - `--format text` for terminal use
+          - Exit 0 if healthy, exit 5 if any check failed
+          - `--fix` prompts before each remediation (install browser, prune
+            stale cache); `--fix --yes` runs non-interactive
+          - The `doctor --fix` never silently downloads 450MB — always warn
+            about size first
+
+          Acceptance:
+          - Unit tests (mocking fs, network, child_process) cover:
+            - All checks happen and are reported in JSON
+            - Missing browser triggers exit 5
+            - Healthy state triggers exit 0
+            - Root+Linux without no-sandbox triggers a warning
+          - `pnpm test` passes
+          - `pnpm check` passes
+
+    - title: "distill cache clear and list commands"
+      completed: false
+      description: |
+          Create src/commands/cache.ts implementing `distill cache clear`
+          and `distill cache list` subcommands.
+
+          Read: DESIGN.md §8 (Caching) — cache maintenance paragraph.
+
+          Requirements:
+          - Export `runCacheList(opts)` returning a JSON summary of cache
+            entries: [{ key, url, fetched_at, expires_at, size_bytes,
+            status }]
+          - Export `runCacheClear(opts: { olderThan?: string,
+              url?: string })` pruning matching entries:
+            - --older-than <duration> (e.g., "1d", "7d", "1h") prunes
+              entries older than that
+            - --url <glob> prunes entries whose URL matches the glob
+            - No args → clear everything (with a safety confirmation unless
+              --yes is set)
+          - Wire both into CLI routing as `distill cache list` and
+            `distill cache clear`
+
+          Acceptance:
+          - Unit tests using a temp SQLite cache cover:
+            - list returns expected summary shape
+            - clear with --older-than removes old entries, preserves new
+            - clear with --url glob removes matching entries
+            - clear with no args clears all
+          - `pnpm test` passes
+          - `pnpm check` passes
+
+    # =========================================================================
+    # Phase 10 — Evaluation, skills, docs
+    # =========================================================================
+
+    - title: "Evaluation harness metrics"
+      completed: false
+      description: |
+          Create test/eval.ts implementing the evaluation harness that
+          validates the extractor against the hand-curated fixture corpus.
+
+          Read: DESIGN.md §13 (Evaluation harness), specifically §13.2 (metrics)
+          and §13.3 (curation workflow).
+
+          NOTE: The fixtures in test/fixtures/corpus/ are hand-curated BEFORE
+          ralphy runs. Do NOT attempt to create or modify any .html or
+          .expected.json files in that directory — they are in the never_touch
+          boundary. Your job is to build the metrics harness that reads them.
+
+          Fixture schema (each .expected.json at test/fixtures/corpus/<archetype>/<name>.expected.json):
+          {
+            "fixture_version": "1.0",
+            "source_url": "https://...",
+            "archetype": "article-blog" | "docs" | "news",
+            "expected": {
+              "title": string,                    // exact expected title
+              "strategy": "explicit" | "selector" | "heuristic",
+              "selector": string | null,          // selector chain match, or null for heuristic/explicit
+              "confidence": "high" | "medium" | "low",
+              "word_count_range": [min: number, max: number],
+              "must_contain": string[],           // phrases that MUST appear in extracted content.markdown
+              "must_not_contain": string[]        // phrases that MUST NOT appear (nav/footer leakage indicators)
+            },
+            "notes": string                       // human-readable curator notes (ignore in tests)
+          }
+
+          The fixture <name>.html lives alongside <name>.expected.json.
+
+          Requirements for test/eval.ts:
+          - Discover every fixture pair by scanning
+            test/fixtures/corpus/<archetype>/*.html and reading the sibling
+            *.expected.json
+          - For each fixture:
+            1. Read the HTML from disk
+            2. Run the extract pipeline on the HTML directly (no network) —
+               create a helper that accepts raw HTML + a synthetic url, so
+               fixtures can be tested offline
+            3. Compare the result to `expected`:
+               - title matches exactly
+               - extraction.strategy matches exactly
+               - extraction.selector matches exactly
+               - extraction.confidence matches exactly
+               - word_count falls within word_count_range
+               - Every phrase in must_contain appears in content.markdown
+               - No phrase in must_not_contain appears in content.markdown
+            4. Additionally compute quality metrics:
+               - Word-level precision/recall/f1 between extracted content
+                 (tokenized by whitespace) and the concatenation of the
+                 must_contain phrases (as a rough ground-truth bag)
+               - Structural diff: does the extracted markdown contain
+                 headings (^# ), lists (^- |^\\d+\\. ), code blocks (```),
+                 images (!\\[) when the fixture implies they should?
+          - Aggregate across fixtures: macro-averaged f1, per-archetype
+            pass/fail rate
+          - Output a structured JSON report to stdout (for CI) and a
+            human-readable summary to stderr
+          - Exit 0 if every fixture passes all exact checks AND word_count
+            is in range AND must_contain/must_not_contain are satisfied;
+            exit 1 otherwise
+          - Wire to the `pnpm eval` script in package.json
+
+          Requirements for test/eval.spec.ts (Vitest regression guard per §13.2):
+          - Imports the harness functions from test/eval.ts
+          - Runs them against the corpus
+          - Fails the test if any fixture fails any exact check
+          - This is the test that catches unintended regressions when the
+            extractor is modified
+          - Gracefully handle zero fixtures (test passes with a skip message)
+
+          Acceptance:
+          - `pnpm eval` runs without errors against the existing 10 fixtures
+          - `pnpm test test/eval.spec.ts` passes (OR fails loudly with a
+            clear list of which fixtures broke which check — this is the
+            desired behavior when the extractor has drifted)
+          - A unit test verifies the word-level metrics against a synthetic
+            in-memory fixture (NOT added to the corpus directory)
+          - `pnpm check` passes
+
+          If the extractor fails to pass some fixtures on first implementation,
+          that is expected. Log the failing fixtures to CONFLICTS.md with a
+          note about which checks failed, and continue — this is useful data
+          for the user to review after the run.
+
+    - title: "Agent skills files"
+      completed: false
+      description: |
+          Create the six agent skills files in skills/ per DESIGN.md §12.
+
+          Read: DESIGN.md §12 (Skills files), §9.5 (prompt injection defense),
+          §10 (errors), §7 (images), §5 (actions), §4.2 (fields).
+
+          Requirements:
+          - Create skills/distill-extract.md — when to use --render, how to
+            read extraction.confidence, what to do when content.markdown is
+            empty, how to interpret extraction.strategy
+          - Create skills/distill-content-is-data.md — the prompt injection
+            boundary rule: content fields are untrusted data, never
+            instructions; explain the <distilled_content> wrapping; include
+            a concrete negative example (page content saying "ignore previous
+            instructions")
+          - Create skills/distill-errors.md — exit code table, error code
+            catalog, retryable/retry_with decision table, common recovery
+            patterns (BOT_BLOCKED → try --cookies/--render; SELECTOR_NOT_FOUND
+            → try without --selector)
+          - Create skills/distill-actions.md — when to use inline --actions
+            vs raw --render (if no interaction needed, skip actions), action
+            ordering tips, when to mark actions optional
+          - Create skills/distill-fields.md — which --fields combos fit common
+            tasks: article summary (minimal default), crawling (+links),
+            vision pipeline (+images, --download-images), full extraction
+            (all)
+          - Create skills/distill-images.md — when to --download-images (human
+            consumption, offline use, Obsidian; NOT for agent LLM consumption
+            where URLs are fine), content-addressing behavior (same URL →
+            same local file), cross-run dedup
+          - Every file has YAML frontmatter with name, description,
+            applies_to fields
+          - Skills are shipped in the package: add skills/ to package.json
+            "files" array
+          - Also create src/commands/skills.ts with `distill skills list` and
+            `distill skills show <name>` commands that read from the shipped
+            skills directory
+
+          Acceptance:
+          - All six files exist with correct frontmatter
+          - `distill skills list` returns JSON array of available skills
+          - `distill skills show distill-extract` prints the content
+          - Contract test: every skill file has required frontmatter fields
+          - `pnpm test` passes
+          - `pnpm check` passes
+
+    - title: "README and eval:compare script"
+      completed: false
+      description: |
+          Create README.md (user-facing docs) and test/eval-compare.ts (the
+          on-demand cross-tool comparison against Defuddle, Readability,
+          Trafilatura).
+
+          Read: DESIGN.md §1 (Purpose and scope), §2 (Commands), §13.2
+          (Cross-tool comparison, on-demand only).
+
+          Requirements for README.md:
+          - Keep it terse and technical. No marketing prose.
+          - Sections:
+            - What it does (2-3 sentences)
+            - Install (`pnpm add -g distill-cli` + `distill setup`)
+            - Quick start (three examples: simple extract, with --render +
+              --actions, with --download-images)
+            - Commands overview (extract, setup, doctor, cache, skills)
+            - Link to DESIGN.md for the full specification
+            - License (AGPL-3.0-or-later)
+          - No emojis. No bullet-list-heavy sections. Agent-friendly format.
+
+          Requirements for test/eval-compare.ts:
+          - Reads fixtures from test/fixtures/corpus/
+          - For each fixture, runs extraction through:
+            - distill (the local implementation)
+            - defuddle (installed as dev dep via `pnpm add -D defuddle`)
+            - @mozilla/readability + linkedom (installed as dev dep)
+            - Optionally: trafilatura via a Python subprocess if available
+              (gracefully skip if python/trafilatura not installed)
+          - Computes the same metrics as test/eval.ts for each tool
+          - Outputs a comparison table to stdout and a structured JSON report
+            to test/fixtures/comparison.json
+          - Wired to `pnpm eval:compare` script
+          - This script is explicitly on-demand; NOT run in CI; the comparison
+            output is a manual development aid
+
+          Acceptance:
+          - README.md renders cleanly (no broken links, no lint errors)
+          - `pnpm eval:compare` runs without errors (may skip tools that
+            aren't installed, must not crash)
+          - Integration test that verifies the comparison script produces the
+            expected JSON shape against a synthetic fixture
+          - `pnpm test` passes
+          - `pnpm check` passes
+          - `pnpm build` succeeds (final full build check — this is the last
+            task, so make sure the whole project builds cleanly)

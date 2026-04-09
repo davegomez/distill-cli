@@ -1,0 +1,91 @@
+project:
+    name: "distill-cli"
+    language: "TypeScript"
+    framework: "Node CLI"
+
+commands:
+    test: "pnpm test"
+    lint: "pnpm biome check ."
+    type-check: "pnpm type-check"
+    build: "pnpm build"
+
+capabilities:
+    browser: "off"
+
+rules:
+    # -----------------------------
+    # Source of truth
+    # -----------------------------
+    - "DESIGN.md at the repo root is the source of truth for all behavior. Before starting any task, read the DESIGN.md sections referenced in the task description and implement the behavior exactly as specified."
+    - "Never modify DESIGN.md. It is the specification, not a workspace."
+    - "If a task conflicts with DESIGN.md or you discover an ambiguity, DO NOT stop the run. Write an entry to CONFLICTS.md at the repo root containing: the task title, a description of the conflict, your chosen interpretation, and the DESIGN.md section at play. Then implement your best-effort solution and continue."
+    - "If a task is completely blocked by missing upstream work, log the block to CONFLICTS.md, mark the task completed in PRD.yaml with a brief note explaining what was skipped, and move on. Do not halt the loop."
+
+    # -----------------------------
+    # Quality gates (task is not done until these pass)
+    # -----------------------------
+    - "A task is not done until all per-task acceptance criteria are satisfied, `pnpm test` passes, and `pnpm check` (type-check + biome) passes. If any of these fails, the task is incomplete — fix the issue before marking it done."
+    - "Every new source file must ship with Vitest unit tests in a colocated `.test.ts` file. No production code without tests."
+    - "Run `pnpm biome check --write` on every file you create or modify before marking the task done."
+    - "Use TypeScript strict mode. Never use `any` without a comment justifying why a more specific type is impossible."
+
+    # -----------------------------
+    # Architectural invariants (from DESIGN.md)
+    # -----------------------------
+    - "All input, output, and error shapes are defined by Zod schemas in `src/schema/`. These schemas are the single source of truth. The `--help --json` output and any JSON Schema documents are generated from them, never hand-written."
+    - "Use `linkedom` for HTML parsing. Never use jsdom, cheerio, or other DOM libraries."
+    - "Use `node:sqlite` (Node 22+ built-in) for the cache. Never use better-sqlite3, sql.js, or other SQLite drivers."
+    - "Never cache HTTP responses when `--cookies` or an `Authorization` header is present. This invariant MUST be enforced by a Vitest test that fails if broken."
+    - "Content fields (`content.markdown`, `content.text`, `content.html`) are wrapped in `<distilled_content>...</distilled_content>` tags by default. The `--raw-content` flag strips the wrapping."
+    - "Never log cookie values or authorization headers. Redact headers matching `/^(cookie|authorization|x-api-key|x-auth)/i` in all structured output, including error messages."
+
+    # -----------------------------
+    # Imports and module system
+    # -----------------------------
+    - "Use the `#/*` path alias for src imports, never relative paths across module boundaries. Write `import { foo } from '#/security/url';`, not `import { foo } from '../security/url';`."
+    - "All code is ESM. No `require()`, no CommonJS. Use `import` / `export` throughout."
+
+    # -----------------------------
+    # Tooling
+    # -----------------------------
+    - "Install the LATEST version of every package. Do NOT pin versions in `pnpm add` commands. Run `pnpm add <pkg>`, never `pnpm add <pkg>@x.y.z`."
+    - "Use pnpm exclusively. Never run `npm` or `yarn` commands."
+    - "License is `AGPL-3.0-or-later` and is set in the LICENSE file and `package.json`. Do not change it."
+
+boundaries:
+    never_touch:
+        # The specification itself — agent must never edit this
+        - "DESIGN.md"
+
+        # Ralphy's own state
+        - ".ralphy/**"
+        - ".ralphy-worktrees/**"
+        - ".ralphy-sandboxes/**"
+        - "PRD.yaml"
+
+        # Git internals
+        - ".git/**"
+
+        # Dependency lockfiles — let pnpm manage these
+        - "pnpm-lock.yaml"
+        - "node_modules/**"
+
+        # Hand-curated test fixtures (ground truth, never auto-regenerate)
+        - "test/fixtures/corpus/**/*.html"
+        - "test/fixtures/corpus/**/*.expected.json"
+
+        # Environment files
+        - ".env"
+        - ".env.*"
+
+        # OS cruft
+        - ".DS_Store"
+
+        # Build outputs
+        - "dist/**"
+
+        # AI / memory
+        - ".claude/**"
+
+        # License
+        - "LICENSE"
