@@ -1,0 +1,26 @@
+{
+    "fixture_version": "1.0",
+    "source_url": "https://www.nasa.gov/news-release/nasa-names-astronauts-to-next-moon-mission-first-crew-under-artemis/",
+    "archetype": "news",
+    "expected": {
+        "title": "NASA Names Astronauts to Next Moon Mission, First Crew Under Artemis - NASA",
+        "strategy": "selector",
+        "selector": "main",
+        "confidence": "high",
+        "word_count_range": [500, 1400],
+        "must_contain": [
+            "Artemis",
+            "Canadian Space Agency",
+            "Moon",
+            "astronauts"
+        ],
+        "must_not_contain": [
+            "Suggested Searches",
+            "Climate Change Artemis Expedition",
+            "View All Topics",
+            "Subscribe",
+            "NASA Brand & Usage Guidelines"
+        ]
+    },
+    "notes": "NASA press release on their WordPress-style site. Has <main>, <article>, and .entry-content. Selector chain hits <main>. Top nav is extensive (News & Events, Multimedia, search suggestions). Chrome stripping must remove the nav; body text is short (press release length)."
+}

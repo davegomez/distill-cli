@@ -1,0 +1,26 @@
+{
+    "fixture_version": "1.0",
+    "source_url": "https://www.postgresql.org/docs/current/sql-select.html",
+    "archetype": "docs",
+    "expected": {
+        "title": "PostgreSQL: Documentation: 18: SELECT",
+        "strategy": "heuristic",
+        "selector": null,
+        "confidence": "low",
+        "word_count_range": [7500, 12000],
+        "must_contain": [
+            "SELECT",
+            "retrieve rows",
+            "FROM",
+            "WHERE",
+            "WITH"
+        ],
+        "must_not_contain": [
+            "Home About Download Documentation Community",
+            "Supported Versions",
+            "Development Versions",
+            "Unsupported versions"
+        ]
+    },
+    "notes": "Postgres docs are older-style HTML with no main/article/role-main — relies on the heuristic fallback. Navigation chrome includes the top menu (Home/About/Download/...) and the version selector list. Heuristic should pick the docs body (which has heavy text density) over the nav."
+}

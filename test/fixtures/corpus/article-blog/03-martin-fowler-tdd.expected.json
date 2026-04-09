@@ -1,0 +1,25 @@
+{
+    "fixture_version": "1.0",
+    "source_url": "https://martinfowler.com/articles/is-tdd-dead/",
+    "archetype": "article-blog",
+    "expected": {
+        "title": "Is TDD Dead?",
+        "strategy": "selector",
+        "selector": "main",
+        "confidence": "high",
+        "word_count_range": [4000, 6500],
+        "must_contain": [
+            "Kent Beck",
+            "David Heinemeier Hansson",
+            "Test-Driven Development",
+            "TDD"
+        ],
+        "must_not_contain": [
+            "Board Games",
+            "Photography",
+            "Thoughtworks Home Insights Careers Radar Engineering",
+            "follow RSS Mastodon LinkedIn Bluesky"
+        ]
+    },
+    "notes": "Martin Fowler's site has <main> but also a lot of top-nav chrome (topic lists, site-wide links, social buttons). Selector chain should hit <main>. Chrome stripping must remove the nav header and social share widgets."
+}

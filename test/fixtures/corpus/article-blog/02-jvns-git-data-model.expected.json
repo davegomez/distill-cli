@@ -1,0 +1,24 @@
+{
+    "fixture_version": "1.0",
+    "source_url": "https://jvns.ca/blog/2026/01/08/a-data-model-for-git/",
+    "archetype": "article-blog",
+    "expected": {
+        "title": "A data model for Git (and other docs updates)",
+        "strategy": "selector",
+        "selector": "main",
+        "confidence": "high",
+        "word_count_range": [700, 1300],
+        "must_contain": [
+            "Git",
+            "documentation",
+            "data model"
+        ],
+        "must_not_contain": [
+            "Skip to main content",
+            "About Talks Projects",
+            "Mastodon Bluesky Github",
+            "Favorites TIL Zines"
+        ]
+    },
+    "notes": "Julia Evans blog uses Octopress-style markup with <main> AND <article>. Selector chain should hit <main> first. Chrome stripping must remove the nav header (About/Talks/Projects/etc.) — verified by must_not_contain entries."
+}

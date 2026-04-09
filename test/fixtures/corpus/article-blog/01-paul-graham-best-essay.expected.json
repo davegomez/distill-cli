@@ -1,0 +1,19 @@
+{
+    "fixture_version": "1.0",
+    "source_url": "https://paulgraham.com/best.html",
+    "archetype": "article-blog",
+    "expected": {
+        "title": "The Best Essay",
+        "strategy": "heuristic",
+        "selector": null,
+        "confidence": "low",
+        "word_count_range": [3500, 4800],
+        "must_contain": [
+            "My goal here is to figure out what the best essay would be like",
+            "A good essay has to be surprising",
+            "well-written"
+        ],
+        "must_not_contain": []
+    },
+    "notes": "Paul Graham's site has no nav chrome, no <main>, no <article> — just <body> with <font> and <br>. The selector chain cannot match anything, so the heuristic fallback runs against the whole body. There is essentially no chrome to strip, so the heuristic should capture the entire essay cleanly. Confidence is 'low' because strategy is heuristic, per DESIGN.md §6.1 — but extraction quality should still be high."
+}

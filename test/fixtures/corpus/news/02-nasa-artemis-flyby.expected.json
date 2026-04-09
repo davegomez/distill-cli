@@ -1,0 +1,25 @@
+{
+    "fixture_version": "1.0",
+    "source_url": "https://www.nasa.gov/news-release/nasas-artemis-ii-crew-beams-official-moon-flyby-photos-to-earth/",
+    "archetype": "news",
+    "expected": {
+        "title": "NASA\u2019s Artemis II Crew Beams Official Moon Flyby Photos to Earth - NASA",
+        "strategy": "selector",
+        "selector": "main",
+        "confidence": "high",
+        "word_count_range": [700, 1800],
+        "must_contain": [
+            "Artemis II",
+            "Moon",
+            "flyby",
+            "crew"
+        ],
+        "must_not_contain": [
+            "Suggested Searches",
+            "NASA+ Images NASA Live NASA Apps",
+            "View All Topics",
+            "Subscribe"
+        ]
+    },
+    "notes": "Second NASA press release for corpus diversity. Same template as 01-nasa-artemis — hits <main> via selector chain. Press release length. Note the Unicode apostrophe in the title (U+2019) must be preserved exactly."
+}

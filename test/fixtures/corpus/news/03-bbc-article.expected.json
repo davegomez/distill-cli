@@ -1,0 +1,24 @@
+{
+    "fixture_version": "1.0",
+    "source_url": "https://www.bbc.com/news/articles/c05d8j9r5ejo",
+    "archetype": "news",
+    "expected": {
+        "title": "Trump criticises Nato as alliance chief Mark Rutte describes meeting as 'very frank'",
+        "strategy": "selector",
+        "selector": "main",
+        "confidence": "high",
+        "word_count_range": [400, 1500],
+        "must_contain": [
+            "Trump",
+            "Nato",
+            "Mark Rutte"
+        ],
+        "must_not_contain": [
+            "Skip to content British Broadcasting Corporation",
+            "Home News Sport Business Technology Health",
+            "BBC InDepth BBC Verify",
+            "Arts Travel Earth Audio Video Live"
+        ]
+    },
+    "notes": "BBC News article with heavy site navigation chrome (massive top nav covering every section). Has <main> AND <article> — selector chain hits <main> first. Title uses HTML-encoded apostrophe (&#x27;) which must be decoded. BBC titles may have trailing whitespace in og:title."
+}

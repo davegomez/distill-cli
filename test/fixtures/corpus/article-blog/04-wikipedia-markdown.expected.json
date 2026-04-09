@@ -1,0 +1,27 @@
+{
+    "fixture_version": "1.0",
+    "source_url": "https://en.wikipedia.org/wiki/Markdown",
+    "archetype": "article-blog",
+    "expected": {
+        "title": "Markdown - Wikipedia",
+        "strategy": "selector",
+        "selector": "main",
+        "confidence": "high",
+        "word_count_range": [2500, 4500],
+        "must_contain": [
+            "Markdown",
+            "lightweight markup language",
+            "John Gruber",
+            "plain text"
+        ],
+        "must_not_contain": [
+            "Jump to content",
+            "Main menu move to sidebar",
+            "Navigation Main page Contents Current events",
+            "Random article About Wikipedia Contact us",
+            "Create account Log in",
+            "Donate"
+        ]
+    },
+    "notes": "Wikipedia has <main> but wraps it in enormous navigation chrome (main menu, sidebar, footer, language list, references, external links). Selector chain hits <main>. Chrome stripping removes the sidebars and top nav — validated by must_not_contain. Confidence should be high due to long word count and low link density in the article body."
+}

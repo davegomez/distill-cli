@@ -1,0 +1,26 @@
+{
+    "fixture_version": "1.0",
+    "source_url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/map",
+    "archetype": "docs",
+    "expected": {
+        "title": "Array.prototype.map() - JavaScript | MDN",
+        "strategy": "selector",
+        "selector": "main",
+        "confidence": "high",
+        "word_count_range": [1200, 2500],
+        "must_contain": [
+            "map()",
+            "Array",
+            "callback",
+            "new array"
+        ],
+        "must_not_contain": [
+            "Skip to main content Skip to search",
+            "HTML: Markup language HTML reference",
+            "CSS: Styling language CSS reference",
+            "JavaScript: Scripting language JS reference",
+            "Layout cookbook"
+        ]
+    },
+    "notes": "MDN uses <main> for article content and has a large top-nav mega-menu (HTML/CSS/JS/etc.) that must be stripped. Selector chain hits <main>. Confidence high because the docs body has high text density and clean structure."
+}

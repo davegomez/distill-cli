@@ -1,0 +1,25 @@
+{
+    "fixture_version": "1.0",
+    "source_url": "https://nodejs.org/api/fs.html",
+    "archetype": "docs",
+    "expected": {
+        "title": "File system | Node.js v25.9.0 Documentation",
+        "strategy": "heuristic",
+        "selector": null,
+        "confidence": "low",
+        "word_count_range": [25000, 42000],
+        "must_contain": [
+            "fs.readFile",
+            "fs.writeFile",
+            "Promises API",
+            "file system",
+            "FileHandle"
+        ],
+        "must_not_contain": [
+            "About this documentation Usage and example Assertion testing",
+            "Child processes Cluster Command-line options",
+            "Deprecated APIs Diagnostics Channel DNS Domain"
+        ]
+    },
+    "notes": "Node.js docs use <div id=\"apicontent\"> for the main content and <div role=\"navigation\" id=\"column2\"> for the sidebar TOC. The selector chain has no matching selector (no main/article/role=main/#content). The heuristic fallback must score the #apicontent div above the navigation column to extract correctly. Chrome stripping should remove the role=navigation sidebar. The must_not_contain entries are the navigation list of all Node.js modules — if they appear, chrome stripping failed."
+}
