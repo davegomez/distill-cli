@@ -1,0 +1,3 @@
+- Use git-flow to manage Git branching | `git flow help`
+- Finish branches with rebase instead of merge
+- Always use `Skill(/ship)` to commit changes
