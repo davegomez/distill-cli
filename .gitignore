@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.*
+.DS_Store
+*.log
+pnpm-debug.log
+.ralphy-worktrees/
+.ralphy-sandboxes/
+test-results/
+playwright-report/
+local.db
+CONFLICTS.md

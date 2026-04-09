@@ -1,0 +1,53 @@
+{
+    "name": "distill-cli",
+    "version": "0.1.0",
+    "type": "module",
+    "license": "AGPL-3.0-or-later",
+    "engines": {
+        "node": ">=24"
+    },
+    "bin": {
+        "distill": "./bin/distill"
+    },
+    "imports": {
+        "#/*": "./src/*"
+    },
+    "scripts": {
+        "build": "tsc",
+        "check": "pnpm run type-check && biome check .",
+        "type-check": "tsc --noEmit",
+        "lint": "biome lint .",
+        "lint:fix": "biome lint --write .",
+        "format": "biome format --write .",
+        "format:check": "biome format .",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "test:e2e": "DISTILL_E2E=1 vitest run --config vitest.e2e.config.ts",
+        "eval": "tsx test/eval.ts",
+        "eval:compare": "tsx test/eval.ts --compare"
+    },
+    "pnpm": {
+        "onlyBuiltDependencies": [
+            "esbuild",
+            "lefthook",
+            "playwright",
+            "better-sqlite3"
+        ]
+    },
+    "dependencies": {
+        "file-type": "^22.0.1",
+        "is-svg": "^6.1.0",
+        "linkedom": "^0.18.12",
+        "playwright": "^1.59.1",
+        "zod": "^4.3.6"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "^2.4.11",
+        "@types/node": "^25.5.2",
+        "lefthook": "^2.1.5",
+        "tsx": "^4.21.0",
+        "typescript": "^6.0.2",
+        "vite-tsconfig-paths": "^6.1.1",
+        "vitest": "^4.1.4"
+    }
+}
