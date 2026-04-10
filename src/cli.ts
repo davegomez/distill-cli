@@ -1,6 +1,11 @@
 import { parseArgs } from 'node:util';
+import { renderHelpJson, renderHelpText } from '#/cli/help.ts';
 import { readInput } from '#/cli/input.ts';
+import { runCacheClear, runCacheList } from '#/commands/cache.ts';
+import { runDoctor } from '#/commands/doctor.ts';
 import { runExtract } from '#/commands/extract.ts';
+import { runSetup } from '#/commands/setup.ts';
+import { listSkills, showSkill } from '#/commands/skills.ts';
 import { DistillError, unknownError } from '#/schema/errors.ts';
 import { type ExtractInput, ExtractInputSchema } from '#/schema/input.ts';
 import type { ExtractError } from '#/schema/output.ts';
@@ -98,10 +103,26 @@ async function handleExtract(
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
 
+/** Handle --help / --help --json for any command. Returns true if help was handled. */
+function handleHelp(command: string, values: Record<string, unknown>): boolean {
+    if (!values.help) return false;
+
+    if (values.json) {
+        process.stdout.write(
+            `${JSON.stringify(renderHelpJson(command), null, 2)}\n`,
+        );
+    } else {
+        process.stdout.write(renderHelpText(command));
+    }
+    return true;
+}
+
 async function main(): Promise<void> {
     const { values, positionals } = parseArgs({
         args: process.argv.slice(2),
         options: {
+            help: { type: 'boolean', default: false },
+            json: { type: 'boolean', default: false },
             input: { type: 'string' },
             selector: { type: 'string' },
             render: { type: 'boolean', default: false },
@@ -117,6 +138,13 @@ async function main(): Promise<void> {
             cookies: { type: 'string' },
             format: { type: 'string' },
             fields: { type: 'string' },
+            browser: { type: 'string' },
+            force: { type: 'boolean', default: false },
+            check: { type: 'boolean', default: false },
+            fix: { type: 'boolean', default: false },
+            yes: { type: 'boolean', default: false },
+            'older-than': { type: 'string' },
+            url: { type: 'string' },
         },
         allowPositionals: true,
         strict: true,
@@ -125,25 +153,117 @@ async function main(): Promise<void> {
     const subcommand = positionals[0];
 
     if (!subcommand) {
+        if (values.help) {
+            process.stdout.write(
+                'Usage: distill <command> [options]\n\nCommands: extract, setup, doctor, cache, skills\n\nUse --help on any command for details.\n',
+            );
+            return;
+        }
         process.stdout.write(
-            'Usage: distill <command> [options]\n\nCommands: extract, setup, doctor, cache\n',
+            'Usage: distill <command> [options]\n\nCommands: extract, setup, doctor, cache, skills\n',
         );
         return;
     }
 
     if (subcommand === 'extract') {
+        if (handleHelp('extract', values)) return;
         await handleExtract(positionals, values);
         return;
     }
 
-    if (
-        subcommand === 'setup' ||
-        subcommand === 'doctor' ||
-        subcommand === 'cache'
-    ) {
-        process.stdout.write(
-            `Command "${subcommand}" is not yet implemented.\n`,
-        );
+    if (subcommand === 'setup') {
+        if (handleHelp('setup', values)) return;
+        await runSetup({
+            browser: values.browser as string | undefined,
+            force: values.force as boolean | undefined,
+            check: values.check as boolean | undefined,
+            json: values.json as boolean | undefined,
+        });
+        return;
+    }
+
+    if (subcommand === 'doctor') {
+        if (handleHelp('doctor', values)) return;
+        await runDoctor({
+            fix: values.fix as boolean | undefined,
+            yes: values.yes as boolean | undefined,
+            json: values.json as boolean | undefined,
+            format: values.format as 'json' | 'text' | undefined,
+        });
+        return;
+    }
+
+    if (subcommand === 'cache') {
+        const cacheAction = positionals[1];
+        if (handleHelp(subcommand, values)) return;
+
+        if (cacheAction === 'list') {
+            const entries = runCacheList();
+            process.stdout.write(`${JSON.stringify(entries, null, 2)}\n`);
+            return;
+        }
+
+        if (cacheAction === 'clear') {
+            const olderThan = values['older-than'] as string | undefined;
+            const url = values.url as string | undefined;
+            const yes = values.yes as boolean;
+
+            // Safety confirmation for unfiltered clear
+            if (!olderThan && !url && !yes) {
+                const { createInterface } = await import('node:readline');
+                const rl = createInterface({
+                    input: process.stdin,
+                    output: process.stderr,
+                });
+                const confirmed = await new Promise<boolean>((resolve) => {
+                    rl.question(
+                        'This will clear all cached entries. Proceed? [y/N] ',
+                        (answer) => {
+                            rl.close();
+                            resolve(answer.trim().toLowerCase() === 'y');
+                        },
+                    );
+                });
+                if (!confirmed) {
+                    process.stderr.write('Aborted.\n');
+                    return;
+                }
+            }
+
+            const result = runCacheClear({ olderThan, url });
+            process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+            return;
+        }
+
+        process.stdout.write('Usage: distill cache <list|clear> [options]\n');
+        process.exit(5);
+    }
+
+    if (subcommand === 'skills') {
+        const skillsAction = positionals[1];
+
+        if (skillsAction === 'list' || !skillsAction) {
+            const skills = listSkills();
+            process.stdout.write(`${JSON.stringify(skills, null, 2)}\n`);
+            return;
+        }
+
+        if (skillsAction === 'show') {
+            const skillName = positionals[2];
+            if (!skillName) {
+                process.stderr.write('Usage: distill skills show <name>\n');
+                process.exit(3);
+            }
+            const content = showSkill(skillName);
+            if (!content) {
+                process.stderr.write(`Unknown skill: ${skillName}\n`);
+                process.exit(3);
+            }
+            process.stdout.write(content);
+            return;
+        }
+
+        process.stdout.write('Usage: distill skills <list|show <name>>\n');
         process.exit(5);
     }
 
