@@ -1,0 +1,321 @@
+tasks:
+  - title: Wire --render and --actions into the extract pipeline
+    completed: true
+    description: |
+      The Playwright renderer (src/extractor/render.ts) and actions DSL
+      executor (src/extractor/actions.ts) exist as fully-implemented and
+      tested modules, but are NEVER invoked from runExtract in
+      src/commands/extract.ts. Passing --render or --actions on the
+      command line is silently a no-op today: the orchestration always
+      uses cachedFetch (the raw HTTP path).
+
+      This is the single biggest functional gap from DESIGN.md §2 (raw-
+      first with optional rendering) and §5 (Actions DSL).
+
+      Read: DESIGN.md §2, §5, §10.2 (BROWSER_NOT_INSTALLED,
+      BROWSER_LAUNCH_FAILED, ACTION_* error codes).
+
+      Requirements:
+      - In src/commands/extract.ts, branch the fetch step on input.render:
+        - When false (default): use cachedFetch as today
+        - When true: call renderWithPlaywright(...) from src/extractor/render.ts
+          with the same opts (cookies, headers, userAgent, timeout) and
+          treat the returned { finalUrl, html } as the fetch result
+      - When input.actions is present (must imply input.render per §5):
+        - If input.render is false but input.actions is non-empty,
+          automatically enable rendering (action execution requires a
+          browser)
+        - Pass the actions array through to renderWithPlaywright so it
+          can execute them via executeActions(page, actions) AFTER page
+          load and BEFORE page.content() capture
+        - The action trace returned by executeActions must be threaded
+          through the result so it appears in _meta.actions_trace when
+          the +actions_trace field group is requested
+      - Surface BROWSER_NOT_INSTALLED, BROWSER_LAUNCH_FAILED, and
+        ACTION_* errors through the existing error handling path so they
+        land in the JSON error output with retry_with hints
+      - Schema: ExtractInputSchema in src/schema/input.ts may need a
+        refinement that asserts "actions implies render" — add it if
+        it's not already there
+      - The render path must NOT use the HTTP cache (rendering is per-
+        request fresh); ensure cachedFetch is bypassed entirely when
+        input.render is true
+      - Update src/extractor/render.ts if needed so its signature accepts
+        actions and runs them inside the page's lifecycle
+
+      Acceptance:
+      - Existing test src/commands/extract.test.ts (or
+        test/integration/extract.test.ts) gains a new case that exercises
+        input.render = true against a fixture, asserting the render path
+        is hit (e.g., via a spy on renderWithPlaywright or by detecting
+        JS-rendered content the raw fetch wouldn't see)
+      - A new integration test exercises input.actions with at least one
+        wait + click action and asserts the action trace appears in the
+        output when --fields +actions_trace is set
+      - When input.render is true and input.cookies is present, the
+        cookies still propagate to the Playwright context (no auth
+        regression)
+      - `pnpm test` shows zero new failures
+      - `pnpm check` passes
+  - title: Fix selector-chain HTML wrapping causing fixture failures
+    completed: true
+    description: >
+      A single one-line bug in src/extractor/strategies/selector-chain.ts
+
+      line 27 causes 5 of the 6 currently-failing eval fixtures. The line
+
+      passes `el.innerHTML` directly to `domToBlocks(...)` without
+
+      wrapping in <html><body>. linkedom's fragment parser then promotes
+
+      the first child element to documentElement, and domToBlocks (lines
+
+      292-293) only traverses that single element, missing all sibling
+
+      blocks.
+
+
+      The pattern used elsewhere in the codebase
+      (src/extractor/strategies/heuristic.ts
+
+      line 52, src/commands/extract.ts) wraps the HTML correctly. This
+
+      inconsistency is the bug.
+
+
+      Read: src/extractor/strategies/selector-chain.ts,
+
+      src/extractor/strategies/heuristic.ts, src/extractor/blocks.ts
+
+      lines 285-300, and CONFLICTS.md.
+
+
+      Requirements:
+
+      - Modify src/extractor/strategies/selector-chain.ts to wrap the
+        inner HTML before passing it to domToBlocks. Match the pattern
+        used in heuristic.ts so the two strategies behave consistently.
+      - Add a unit test in src/extractor/strategies/selector-chain.test.ts
+        that exercises a multi-sibling block scenario (e.g., a <main>
+        containing several <p> and <h2> siblings) and asserts that ALL
+        blocks are extracted, not just the first.
+      - The fix must NOT regress any existing selector-chain or block
+        tests.
+
+      Acceptance:
+
+      - The new sibling-block test in selector-chain.test.ts passes
+
+      - `pnpm test test/eval.spec.ts` shows the following 5 fixtures
+        transitioning from failing to passing:
+          - article-blog/02-jvns-git-data-model
+          - article-blog/04-wikipedia-markdown
+          - docs/01-nodejs-fs-api
+          - docs/02-mdn-array-map
+          - news/03-bbc-article
+      - The 6th failing fixture (docs/03-postgres-select) MAY still fail
+        after this fix because it has a separate root cause addressed by
+        the next task; that's acceptable
+      - `pnpm check` passes
+  - title: Fix template-string injection pattern in actions executor
+    completed: true
+    description: |
+      src/extractor/actions.ts line 176 builds a Playwright page.evaluate
+      call by interpolating into a template string:
+
+          page.evaluate(`window.scrollTo(0, ${y})`)
+
+      This is currently safe because `y` is a constrained number from
+      the Zod schema, but it's the wrong pattern: any future relaxation
+      of the schema (e.g., supporting a CSS selector value or a custom
+      script field) would create a real injection. Defense in depth says
+      we never use template strings in evaluate calls.
+
+      Read: src/extractor/actions.ts (line 176 and any other page.evaluate
+      calls), Playwright's parameterized evaluate documentation.
+
+      Requirements:
+      - Replace the template-string evaluate at line 176 with the
+        parameterized form:
+            await page.evaluate((y) => window.scrollTo(0, y), scrollValue);
+      - Audit the rest of src/extractor/actions.ts for any other
+        page.evaluate or page.evaluateHandle calls using template
+        interpolation; convert them all to parameterized form
+      - Add a unit test that verifies the scroll action invokes
+        page.evaluate with a function (not a string) — easiest way is to
+        spy on page.evaluate and assert typeof firstArg === 'function'
+
+      Acceptance:
+      - No template-string page.evaluate calls remain in
+        src/extractor/actions.ts (verifiable via grep)
+      - The new spy test in src/extractor/actions.test.ts passes
+      - All existing actions tests still pass
+      - `pnpm check` passes
+  - title: Extend chrome stripping to handle navigation sidebars without semantic tags
+    completed: true
+    description: |
+      The 6th failing eval fixture (docs/03-postgres-select) has a
+      separate root cause from the selector-chain bug. The Postgres docs
+      page contains a version-selector sidebar that lists "Supported
+      Versions", "Development Versions", "Unsupported versions" as plain
+      <div>s with high link density. There's no <nav>, <aside>, role
+      attribute, or matching cookie/social/ad class pattern, so
+      stripChrome leaves it in place. The heuristic strategy then picks
+      up the entire content area including the sidebar, leaking those
+      phrases into content.markdown and tripping the fixture's
+      must_not_contain checks.
+
+      Read: src/extractor/strip-chrome.ts (especially the existing
+      patterns and the social/ad detection logic),
+      test/fixtures/corpus/docs/03-postgres-select.html (lines 80-200
+      where the version sidebar lives), DESIGN.md §6 step 5.
+
+      Requirements:
+      - Extend stripChrome to recognize and remove plain <div> elements
+        that look like navigation sidebars even when they lack semantic
+        tags or matching class names. A reasonable heuristic:
+        - The element is a <div> (or <ul>) at body-level or in the first
+          children of <main>
+        - It has high link density (e.g., link text > 70% of total text)
+        - It has very little prose content (low average words per text
+          node, no <p> children)
+        - OR: it contains a recognizable version/category list pattern
+          (multiple short link items in a row)
+      - The change must be conservative: do NOT strip article body links
+        or in-content lists. Add tests with both positive cases (version
+        sidebar removed) and negative cases (article links preserved).
+      - Update src/extractor/strip-chrome.test.ts with cases for both
+        patterns. Use test/fixtures/corpus/docs/03-postgres-select.html
+        as the realistic example for the positive case.
+
+      Acceptance:
+      - `pnpm test test/eval.spec.ts` shows docs/03-postgres-select
+        transitioning from failing to passing
+      - All other previously-passing fixtures remain passing
+      - New strip-chrome.test.ts cases for the link-density-based
+        sidebar detection pass
+      - `pnpm check` passes
+  - title: Fix SQLite resource leak on migration error
+    completed: true
+    description: |
+      src/cache/sqlite.ts constructor (around lines 99-129) opens the
+      database synchronously and runs the schema migration immediately.
+      If the migration throws (e.g., from a transient SQL error or a
+      corrupt database file), the database handle is never closed and
+      the file descriptor leaks.
+
+      Read: src/cache/sqlite.ts (constructor + migrate method),
+      src/commands/cache.ts (consumers).
+
+      Requirements:
+      - Choose ONE of the two approaches:
+        (a) Move the migrate() call out of the constructor to a lazy
+            initialization pattern: the first call to get/set/list/clear
+            runs migration if not yet done, and a single migration error
+            is propagated and re-thrown on subsequent calls (no retry
+            spam)
+        (b) Wrap migrate() in the constructor in try/catch; on error,
+            close the database handle before re-throwing
+      - Recommendation: prefer (a) for cleaner separation, but (b) is
+        simpler and acceptable
+      - Add a unit test in src/cache/sqlite.test.ts that simulates a
+        migration failure (e.g., by mocking db.exec to throw on the
+        CREATE TABLE statement) and verifies the database handle is
+        closed before the constructor's exception propagates
+
+      Acceptance:
+      - The new "constructor closes db on migration error" test passes
+      - All existing cache tests still pass
+      - `pnpm check` passes
+  - title: Add runtime guard for fetch retry non-null assertion
+    completed: true
+    description: |
+      src/extractor/fetch.ts line 167-168 throws lastError with a
+      non-null assertion (lastError!), justified by a biome-ignore
+      comment claiming "lastError is always set when loop runs more
+      than once". This is true ONLY when retries >= 1. If a caller ever
+      passes retries: 0, the loop never executes, lastError is
+      undefined, and the non-null assertion converts a TypeError into a
+      confusing throw of `undefined`.
+
+      Read: src/extractor/fetch.ts (around lines 140-180, the retry loop
+      and final throw).
+
+      Requirements:
+      - Add a runtime guard before the final throw: if lastError is not
+        set, throw an unknownError with a clear message like
+        "fetch retry loop produced no error or response; this should be
+        unreachable"
+      - Remove the biome-ignore comment — the runtime guard makes the
+        non-null assertion unnecessary
+      - The guard is "should be unreachable" defense in depth, not a
+        recoverable path
+      - Add a regression test in src/extractor/fetch.test.ts that calls
+        fetchRaw with retries: 0 and a URL that fails immediately, and
+        verifies a meaningful error is thrown (not an `undefined` throw)
+
+      Acceptance:
+      - The new retries: 0 regression test passes
+      - All existing fetch tests still pass
+      - The biome-ignore comment is removed
+      - `pnpm check` passes
+  - title: Explicitly close Playwright page on action failure
+    completed: true
+    description: |
+      src/extractor/render.ts (around lines 95-127) creates a Playwright
+      page inside a context, runs operations on it, and relies on
+      context.close() to cascade-close the page. This usually works, but
+      if executeActions throws or the page enters a bad state, an
+      explicit page.close() in finally is safer and clearer about
+      intent.
+
+      Read: src/extractor/render.ts (the renderWithPlaywright function
+      and its try/finally structure).
+
+      Requirements:
+      - Wrap the page operations in a try/finally so page.close() is
+        called before context.close() in all paths (success and error)
+      - Use a swallowing pattern for the close calls themselves: if
+        close() throws (e.g., page already closed), don't mask the
+        original error
+      - The existing tests should continue to pass; add one new test
+        (mocking the action executor to throw) that verifies page.close
+        is invoked
+
+      Acceptance:
+      - The new "page is closed even when actions throw" test passes
+      - All existing render tests still pass
+      - `pnpm check` passes
+  - title: Remove unused parameter and unsafe type casts in extract command
+    completed: true
+    description: |
+      The audit identified two minor cleanups in src/commands/extract.ts:
+
+      1. Around line 114, an `extractLinks` helper takes a `blocks`
+         parameter that is silenced with `void blocks;` and never used.
+         Either remove the parameter (preferred) or use it.
+
+      2. Around line 259, a value is cast through unknown:
+            stripResult.stripped as unknown as Record<string, unknown>
+         The double cast bypasses type safety. If stripResult.stripped
+         ever becomes malformed, invalid data flows through silently.
+
+      Read: src/commands/extract.ts (lines 100-130 and 250-270),
+      src/extractor/strip-chrome.ts (the StripResult type definition).
+
+      Requirements:
+      - For #1: remove the unused `blocks` parameter from extractLinks
+        (and update its caller). If extractLinks needs the blocks for a
+        real reason, document why with a comment instead of `void`.
+      - For #2: replace the double cast with a properly-typed shape.
+        The cleanest fix is to make the StripResult.stripped field
+        typed as Record<string, number> from the start (in
+        strip-chrome.ts), so consumers don't need to cast. If that's
+        not appropriate, use a Zod schema parse to validate the shape
+        at the boundary.
+
+      Acceptance:
+      - `void blocks;` is gone from src/commands/extract.ts
+      - The double cast at extract.ts:259 is gone
+      - All existing tests still pass
+      - `pnpm check` passes
