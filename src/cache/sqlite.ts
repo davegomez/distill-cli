@@ -101,7 +101,12 @@ export class HttpCache {
         const dir = join(path, '..');
         mkdirSync(dir, { recursive: true });
         this.db = new DatabaseSync(path);
-        this.db.exec('PRAGMA journal_mode=WAL');
+        try {
+            this.db.exec('PRAGMA journal_mode=WAL');
+        } catch (err) {
+            this.db.close();
+            throw err;
+        }
     }
 
     /** Create the cache schema if it doesn't exist. */

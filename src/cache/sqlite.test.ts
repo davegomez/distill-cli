@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     type CacheEntry,
     cacheKey,
@@ -210,6 +210,24 @@ describe('HttpCache', () => {
 
             cache2.close();
         });
+    });
+});
+
+describe('HttpCache constructor error handling', () => {
+    it('closes db handle on initialization error', () => {
+        const closeSpy = vi.spyOn(DatabaseSync.prototype, 'close');
+        const execSpy = vi
+            .spyOn(DatabaseSync.prototype, 'exec')
+            .mockImplementation(() => {
+                throw new Error('simulated PRAGMA failure');
+            });
+
+        const dbPath = makeTmpDb();
+        expect(() => new HttpCache(dbPath)).toThrow('simulated PRAGMA failure');
+        expect(closeSpy).toHaveBeenCalledTimes(1);
+
+        execSpy.mockRestore();
+        closeSpy.mockRestore();
     });
 });
 
