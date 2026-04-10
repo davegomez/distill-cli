@@ -1,4 +1,5 @@
 import { parseHTML } from 'linkedom';
+import type { ActionTraceEntry } from '#/extractor/actions.ts';
 import { classifyArchetype } from '#/extractor/archetype.ts';
 import type { Block } from '#/extractor/blocks.ts';
 import { domToBlocks } from '#/extractor/blocks.ts';
@@ -10,6 +11,7 @@ import { computeConfidence, computeMetrics } from '#/extractor/confidence.ts';
 import { type FullExtractResult, resolveFields } from '#/extractor/fields.ts';
 import { renderHtml } from '#/extractor/html.ts';
 import { renderMarkdown } from '#/extractor/markdown.ts';
+import { renderWithPlaywright } from '#/extractor/render.ts';
 import { extractWithHeuristic } from '#/extractor/strategies/heuristic.ts';
 import { extractWithSelectorChain } from '#/extractor/strategies/selector-chain.ts';
 import { stripChrome } from '#/extractor/strip-chrome.ts';
@@ -17,6 +19,7 @@ import { renderText } from '#/extractor/text.ts';
 import { wrapContentFields } from '#/extractor/wrap-content.ts';
 import { contentEmpty, selectorNotFound } from '#/schema/errors.ts';
 import type { ExtractInput } from '#/schema/input.ts';
+import { loadCookiesFile } from '#/security/cookies.ts';
 import { validateUrl } from '#/security/url.ts';
 
 type Strategy = 'explicit' | 'selector' | 'heuristic';
@@ -149,21 +152,60 @@ export async function runExtract(
         allowPrivateNetwork: input.allow_private_network,
     });
 
-    // 2. Build fetch options and fetch
-    const fetchOpts: CachedFetchOptions = {
-        headers: parseHeaders(input.header),
-        userAgent: input.user_agent,
-        timeout: input.timeout,
-        maxSize: parseSize(input.max_size),
-        retries: input.retries,
-        noCache: input.no_cache,
-        refresh: input.refresh,
-    };
+    // 2. Fetch (raw HTTP) or render (Playwright) — §2, §5
+    let html: string;
+    let finalUrl: string;
+    let httpStatus: number;
+    let fromCache: boolean;
+    let actionTrace: ActionTraceEntry[] = [];
 
-    const fetchResult = await cachedFetch(url.href, fetchOpts);
+    if (input.render) {
+        // Playwright render path — never cached (§8)
+        const cookies = input.cookies
+            ? await loadCookiesFile(input.cookies)
+            : undefined;
+
+        const renderResult = await renderWithPlaywright(url.href, {
+            headers: parseHeaders(input.header),
+            cookies: cookies?.map((c) => ({
+                name: c.name,
+                value: c.value,
+                domain: c.domain,
+                path: c.path,
+            })),
+            userAgent: input.user_agent,
+            timeout: input.timeout,
+            actions: input.actions,
+        });
+
+        html = renderResult.html;
+        finalUrl = renderResult.finalUrl;
+        httpStatus = renderResult.status ?? 200;
+        fromCache = false;
+        if (renderResult.actionTrace) {
+            actionTrace = renderResult.actionTrace;
+        }
+    } else {
+        // Raw HTTP path with optional caching
+        const fetchOpts: CachedFetchOptions = {
+            headers: parseHeaders(input.header),
+            userAgent: input.user_agent,
+            timeout: input.timeout,
+            maxSize: parseSize(input.max_size),
+            retries: input.retries,
+            noCache: input.no_cache,
+            refresh: input.refresh,
+        };
+
+        const fetchResult = await cachedFetch(url.href, fetchOpts);
+
+        html = fetchResult.body.toString('utf-8');
+        finalUrl = fetchResult.finalUrl;
+        httpStatus = fetchResult.status;
+        fromCache = fetchResult._meta.from_cache;
+    }
 
     // 3. Parse HTML via linkedom
-    const html = fetchResult.body.toString('utf-8');
     const { document } = parseHTML(html);
 
     // 4. Strip chrome (mutates document in place)
@@ -236,12 +278,12 @@ export async function runExtract(
             command: 'extract',
             fetched_at: new Date().toISOString(),
             elapsed_ms: elapsedMs,
-            http_status: fetchResult.status,
-            from_cache: fetchResult._meta.from_cache,
-            actions_trace: [],
+            http_status: httpStatus,
+            from_cache: fromCache,
+            actions_trace: actionTrace,
         },
         url: input.url,
-        final_url: fetchResult.finalUrl,
+        final_url: finalUrl,
         title: extractTitle(document),
         content: {
             markdown,

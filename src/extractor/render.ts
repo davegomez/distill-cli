@@ -53,6 +53,8 @@ export interface RenderOptions {
 export interface RenderResult {
     finalUrl: string;
     html: string;
+    /** HTTP status of the initial navigation response. */
+    status?: number;
     /** Trace of executed actions (present only when actions were provided). */
     actionTrace?: ActionTraceEntry[];
 }
@@ -116,11 +118,12 @@ export async function renderWithPlaywright(
         }
 
         const finalUrl = response?.url() ?? page.url();
+        const status = response?.status();
         const html = await page.content();
 
         await context.close();
 
-        return { finalUrl, html, actionTrace };
+        return { finalUrl, html, status, actionTrace };
     } finally {
         await browser.close();
     }

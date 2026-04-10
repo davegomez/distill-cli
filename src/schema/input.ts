@@ -164,7 +164,14 @@ export const ExtractInputSchema = z
         dry_run: z.boolean().default(false),
         raw_content: z.boolean().default(false),
     })
-    .strict();
+    .strict()
+    .transform((data) => ({
+        ...data,
+        // §5.2: --actions implies --render
+        render:
+            data.render ||
+            (data.actions !== undefined && data.actions.length > 0),
+    }));
 
 export type ExtractInput = z.infer<typeof ExtractInputSchema>;
 
