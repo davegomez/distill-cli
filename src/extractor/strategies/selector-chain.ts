@@ -24,7 +24,9 @@ export function extractWithSelectorChain(
     for (const selector of SELECTOR_CHAIN) {
         const el = document.querySelector(selector);
         if (el) {
-            const blocks = domToBlocks(el.innerHTML);
+            const blocks = domToBlocks(
+                `<html><body>${el.innerHTML}</body></html>`,
+            );
             return { strategy: 'selector', selector, blocks };
         }
     }
