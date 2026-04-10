@@ -1,12 +1,11 @@
 /**
- * Tests for the default PageFetcher wiring inside runExtract.
+ * Tests for the default PageFetcher wiring.
  *
- * These tests call runExtract WITHOUT an injected fetcher, exercising
- * the defaultPageFetcher that routes to cachedFetch or renderWithPlaywright.
- * Uses hoisted vi.mock (standard pattern) to stub the I/O modules.
+ * These tests exercise defaultPageFetcher directly, verifying it routes
+ * to cachedFetch or renderWithPlaywright correctly. Uses vi.mock to stub
+ * the I/O modules.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ExtractInputSchema } from '#/schema/input.ts';
 
 // Hoisted mocks — stable, no resetModules needed
 vi.mock('#/extractor/render.ts', () => ({
@@ -20,12 +19,7 @@ vi.mock('#/extractor/cached-fetch.ts', () => ({
 // Must import AFTER vi.mock declarations
 const { renderWithPlaywright } = await import('#/extractor/render.ts');
 const { cachedFetch } = await import('#/extractor/cached-fetch.ts');
-const { runExtract } = await import('#/commands/extract.ts');
-
-const SIMPLE_HTML = `<!DOCTYPE html>
-<html><head><title>Test</title></head>
-<body><main><h1>Hello</h1><p>Content here with enough words.</p></main></body>
-</html>`;
+const { defaultPageFetcher } = await import('#/extractor/default-fetcher.ts');
 
 const mockRender = vi.mocked(renderWithPlaywright);
 const mockFetch = vi.mocked(cachedFetch);
@@ -34,6 +28,13 @@ beforeEach(() => {
     mockRender.mockReset();
     mockFetch.mockReset();
 });
+
+const TEST_URL = new URL('https://example.com/page');
+
+const SIMPLE_HTML = `<!DOCTYPE html>
+<html><head><title>Test</title></head>
+<body><main><h1>Hello</h1><p>Content here with enough words.</p></main></body>
+</html>`;
 
 describe('defaultPageFetcher — render path wiring', () => {
     it('calls renderWithPlaywright with correct options when render is true', async () => {
@@ -44,12 +45,14 @@ describe('defaultPageFetcher — render path wiring', () => {
             actionTrace: [],
         });
 
-        await runExtract(
-            ExtractInputSchema.parse({
-                url: 'https://example.com/page',
-                render: true,
-            }),
-        );
+        const result = await defaultPageFetcher.fetch(TEST_URL, {
+            render: true,
+            timeout: 30000,
+            maxSize: 50 * 1024 * 1024,
+            retries: 2,
+            noCache: false,
+            refresh: false,
+        });
 
         expect(mockRender).toHaveBeenCalledOnce();
         expect(mockRender).toHaveBeenCalledWith(
@@ -57,6 +60,8 @@ describe('defaultPageFetcher — render path wiring', () => {
             expect.objectContaining({ timeout: 30000 }),
         );
         expect(mockFetch).not.toHaveBeenCalled();
+        expect(result.html).toBe(SIMPLE_HTML);
+        expect(result.fromCache).toBe(false);
     });
 
     it('forwards actions to renderWithPlaywright', async () => {
@@ -79,21 +84,24 @@ describe('defaultPageFetcher — render path wiring', () => {
             ],
         });
 
-        await runExtract(
-            ExtractInputSchema.parse({
-                url: 'https://example.com/page',
-                actions,
-            }),
-        );
+        const result = await defaultPageFetcher.fetch(TEST_URL, {
+            render: true,
+            actions,
+            timeout: 30000,
+            maxSize: 50 * 1024 * 1024,
+            retries: 2,
+            noCache: false,
+            refresh: false,
+        });
 
         expect(mockRender).toHaveBeenCalledWith(
             expect.any(String),
             expect.objectContaining({ actions }),
         );
+        expect(result.actionTrace).toHaveLength(1);
     });
 
     it('parses cookies file and maps to Playwright cookie format', async () => {
-        // Create a temp cookie jar
         const { mkdtempSync, writeFileSync, chmodSync, rmSync } = await import(
             'node:fs'
         );
@@ -115,15 +123,16 @@ describe('defaultPageFetcher — render path wiring', () => {
                 status: 200,
             });
 
-            await runExtract(
-                ExtractInputSchema.parse({
-                    url: 'https://example.com/page',
-                    render: true,
-                    cookies: cookiePath,
-                }),
-            );
+            await defaultPageFetcher.fetch(TEST_URL, {
+                render: true,
+                cookies: cookiePath,
+                timeout: 30000,
+                maxSize: 50 * 1024 * 1024,
+                retries: 2,
+                noCache: false,
+                refresh: false,
+            });
 
-            // Verify cookies were parsed and mapped to Playwright format
             expect(mockRender).toHaveBeenCalledWith(
                 expect.any(String),
                 expect.objectContaining({
@@ -154,11 +163,14 @@ describe('defaultPageFetcher — fetch path wiring', () => {
             _meta: { from_cache: false },
         });
 
-        await runExtract(
-            ExtractInputSchema.parse({
-                url: 'https://example.com/page',
-            }),
-        );
+        const result = await defaultPageFetcher.fetch(TEST_URL, {
+            render: false,
+            timeout: 30000,
+            maxSize: 50 * 1024 * 1024,
+            retries: 2,
+            noCache: false,
+            refresh: false,
+        });
 
         expect(mockFetch).toHaveBeenCalledOnce();
         expect(mockFetch).toHaveBeenCalledWith(
@@ -169,5 +181,7 @@ describe('defaultPageFetcher — fetch path wiring', () => {
             }),
         );
         expect(mockRender).not.toHaveBeenCalled();
+        expect(result.html).toBe(SIMPLE_HTML);
+        expect(result.fromCache).toBe(false);
     });
 });
