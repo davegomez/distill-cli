@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { runExtract } from '#/extractor/extract.ts';
-import type { FetchResult, PageFetcher } from '#/extractor/pipeline.ts';
-import { ExtractInputSchema } from '#/schema/input.ts';
+import { fakeFetcher, parseInput } from '#/extractor/test-utils.ts';
 
 const ARTICLE_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -19,29 +18,9 @@ const ARTICLE_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
-function fakeFetcher(
-    html: string,
-    overrides?: Partial<FetchResult>,
-): PageFetcher {
-    return {
-        async fetch(_url, _request) {
-            return {
-                html,
-                finalUrl: 'https://example.com/page',
-                httpStatus: 200,
-                fromCache: false,
-                actionTrace: [],
-                ...overrides,
-            };
-        },
-    };
-}
-
 describe('extraction pipeline with injected fetcher', () => {
     it('extracts content from canned HTML end-to-end', async () => {
-        const input = ExtractInputSchema.parse({
-            url: 'https://example.com/page',
-        });
+        const input = parseInput();
 
         const result = await runExtract(input, {
             fetcher: fakeFetcher(ARTICLE_HTML),

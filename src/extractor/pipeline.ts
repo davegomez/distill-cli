@@ -1,6 +1,9 @@
+import type { parseHTML } from 'linkedom';
 import type { ActionTraceEntry } from '#/extractor/actions.ts';
 import type { Block } from '#/extractor/blocks.ts';
 import type { Action } from '#/schema/input.ts';
+
+export type LinkedomDocument = ReturnType<typeof parseHTML>['document'];
 
 // ---------------------------------------------------------------------------
 // Shared pipeline types
@@ -49,7 +52,14 @@ export interface PageFetcher {
     fetch(url: URL, request: FetchRequest): Promise<FetchResult>;
 }
 
+/** Strategy selection function: explicit → selector-chain → heuristic. */
+export type SelectStrategy = (
+    document: LinkedomDocument,
+    selector?: string,
+) => ExtractionResult;
+
 /** Optional dependencies injected into the extraction pipeline. */
 export interface ExtractOptions {
     fetcher?: PageFetcher;
+    selectStrategy?: SelectStrategy;
 }

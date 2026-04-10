@@ -1,115 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { runExtract } from '#/extractor/extract.ts';
-import type { FetchResult, PageFetcher } from '#/extractor/pipeline.ts';
+import {
+    fakeFetcher,
+    HTML_EXPLICIT,
+    HTML_FULL,
+    HTML_HEURISTIC,
+    HTML_WITH_MAIN,
+    parseInput,
+} from '#/extractor/test-utils.ts';
 import { DistillError } from '#/schema/errors.ts';
-import { ExtractInputSchema } from '#/schema/input.ts';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function fakeFetcher(
-    html: string,
-    overrides?: Partial<FetchResult>,
-): PageFetcher {
-    return {
-        async fetch(_url, _request) {
-            return {
-                html,
-                finalUrl: 'https://example.com/page',
-                httpStatus: 200,
-                fromCache: false,
-                actionTrace: [],
-                ...overrides,
-            };
-        },
-    };
-}
-
-function parse(overrides: Record<string, unknown> = {}) {
-    return ExtractInputSchema.parse({
-        url: 'https://example.com/page',
-        ...overrides,
-    });
-}
-
-// ---------------------------------------------------------------------------
-// HTML fixtures
-// ---------------------------------------------------------------------------
-
-/** Has <main> — triggers selector-chain strategy. */
-const HTML_WITH_MAIN = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <title>Main Article</title>
-    <meta name="description" content="A description">
-    <meta name="author" content="Jane Doe">
-    <meta property="og:site_name" content="Example Site">
-</head>
-<body>
-    <nav><a href="/">Home</a></nav>
-    <main>
-        <h1>Main Heading</h1>
-        <p>First paragraph with enough words to pass quality thresholds for extraction pipeline confidence scoring in tests.</p>
-        <p>Second paragraph providing additional content so the heuristic considers this real article content worth extracting.</p>
-        <img src="https://example.com/photo.jpg" alt="A photo">
-    </main>
-    <footer>Footer content</footer>
-</body>
-</html>`;
-
-/**
- * No main/article/[role="main"]/#content/.post-content/.entry-content.
- * Content lives in a plain <div> with enough paragraphs → heuristic fallback.
- */
-const HTML_HEURISTIC = `<!DOCTYPE html>
-<html lang="en">
-<head><title>Heuristic Page</title></head>
-<body>
-    <nav><a href="/">Nav</a></nav>
-    <div>
-        <h2>Section Title</h2>
-        <p>Paragraph one with sufficient text to score above the heuristic minimum threshold for content detection.</p>
-        <p>Paragraph two adds more bulk to ensure the scoring function picks this div as the content candidate.</p>
-        <p>Paragraph three keeps piling on words so the text length factor dominates the heuristic score calculation.</p>
-        <p>Paragraph four is here because we want a convincing amount of article-like content in this test fixture.</p>
-        <p>Paragraph five rounds out the content block and should push the score well past the minimum threshold.</p>
-    </div>
-    <footer><a href="/about">About</a><a href="/contact">Contact</a></footer>
-</body>
-</html>`;
-
-/** Has a .custom element for explicit selector tests. */
-const HTML_EXPLICIT = `<!DOCTYPE html>
-<html lang="en">
-<head><title>Explicit Page</title></head>
-<body>
-    <div class="custom">
-        <p>Custom-selected content that should be extracted when the user passes selector .custom to the pipeline.</p>
-    </div>
-</body>
-</html>`;
-
-/** Full-featured HTML for field-resolution and metadata tests. */
-const HTML_FULL = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <title>Full Featured Article</title>
-    <meta name="description" content="Comprehensive test page">
-    <meta name="author" content="Test Author">
-    <meta name="article:published_time" content="2025-01-15T10:00:00Z">
-    <meta property="og:site_name" content="Test Site">
-</head>
-<body>
-    <main>
-        <h1>Full Article</h1>
-        <p>This is a full-featured article paragraph with enough words for extraction pipeline confidence and quality thresholds.</p>
-        <p>A second paragraph ensures we have real substance. <a href="https://example.com/link1">Link one</a> and <a href="https://example.com/link2">link two</a>.</p>
-        <p><img src="https://example.com/img1.jpg" alt="Image one"> caption for first image.</p>
-        <p><img src="https://example.com/img2.png" alt="Image two"> caption for second image.</p>
-    </main>
-</body>
-</html>`;
 
 // ===========================================================================
 // 1. Strategy fallback tests
@@ -117,7 +16,7 @@ const HTML_FULL = `<!DOCTYPE html>
 
 describe('strategy fallback', () => {
     it('uses selector-chain strategy when <main> is present', async () => {
-        const result = await runExtract(parse(), {
+        const result = await runExtract(parseInput(), {
             fetcher: fakeFetcher(HTML_WITH_MAIN),
         });
         const extraction = result.extraction as Record<string, unknown>;
@@ -126,7 +25,7 @@ describe('strategy fallback', () => {
     });
 
     it('falls back to heuristic when no selector-chain element matches', async () => {
-        const result = await runExtract(parse(), {
+        const result = await runExtract(parseInput(), {
             fetcher: fakeFetcher(HTML_HEURISTIC),
         });
         const extraction = result.extraction as Record<string, unknown>;
@@ -135,7 +34,7 @@ describe('strategy fallback', () => {
     });
 
     it('uses explicit strategy when input.selector is provided', async () => {
-        const result = await runExtract(parse({ selector: '.custom' }), {
+        const result = await runExtract(parseInput({ selector: '.custom' }), {
             fetcher: fakeFetcher(HTML_EXPLICIT),
         });
         const extraction = result.extraction as Record<string, unknown>;
@@ -144,7 +43,7 @@ describe('strategy fallback', () => {
     });
 
     it('throws SELECTOR_NOT_FOUND when explicit selector misses', async () => {
-        const input = parse({ selector: '.missing' });
+        const input = parseInput({ selector: '.missing' });
         try {
             await runExtract(input, {
                 fetcher: fakeFetcher(HTML_EXPLICIT),
@@ -163,7 +62,7 @@ describe('strategy fallback', () => {
 
 describe('field resolution', () => {
     it('+meta includes description, author, published, language, site_name', async () => {
-        const result = await runExtract(parse({ fields: ['+meta'] }), {
+        const result = await runExtract(parseInput({ fields: ['+meta'] }), {
             fetcher: fakeFetcher(HTML_FULL),
         });
         expect(result).toHaveProperty('description', 'Comprehensive test page');
@@ -174,7 +73,7 @@ describe('field resolution', () => {
     });
 
     it('+links includes links array', async () => {
-        const result = await runExtract(parse({ fields: ['+links'] }), {
+        const result = await runExtract(parseInput({ fields: ['+links'] }), {
             fetcher: fakeFetcher(HTML_FULL),
         });
         expect(result).toHaveProperty('links');
@@ -182,7 +81,7 @@ describe('field resolution', () => {
     });
 
     it('+images includes images array', async () => {
-        const result = await runExtract(parse({ fields: ['+images'] }), {
+        const result = await runExtract(parseInput({ fields: ['+images'] }), {
             fetcher: fakeFetcher(HTML_FULL),
         });
         const images = result.images as Array<{ alt: string; src: string }>;
@@ -193,9 +92,12 @@ describe('field resolution', () => {
     });
 
     it('+content.html includes content.html alongside content.markdown', async () => {
-        const result = await runExtract(parse({ fields: ['+content.html'] }), {
-            fetcher: fakeFetcher(HTML_FULL),
-        });
+        const result = await runExtract(
+            parseInput({ fields: ['+content.html'] }),
+            {
+                fetcher: fakeFetcher(HTML_FULL),
+            },
+        );
         const content = result.content as Record<string, string>;
         expect(content).toHaveProperty('html');
         expect(content).toHaveProperty('markdown');
@@ -203,9 +105,12 @@ describe('field resolution', () => {
     });
 
     it('+content.text includes content.text', async () => {
-        const result = await runExtract(parse({ fields: ['+content.text'] }), {
-            fetcher: fakeFetcher(HTML_FULL),
-        });
+        const result = await runExtract(
+            parseInput({ fields: ['+content.text'] }),
+            {
+                fetcher: fakeFetcher(HTML_FULL),
+            },
+        );
         const content = result.content as Record<string, string>;
         expect(content).toHaveProperty('text');
         expect(content.text.length).toBeGreaterThan(0);
@@ -213,7 +118,7 @@ describe('field resolution', () => {
 
     it('+extraction.metrics includes metrics object', async () => {
         const result = await runExtract(
-            parse({ fields: ['+extraction.metrics'] }),
+            parseInput({ fields: ['+extraction.metrics'] }),
             { fetcher: fakeFetcher(HTML_FULL) },
         );
         const extraction = result.extraction as Record<string, unknown>;
@@ -227,7 +132,7 @@ describe('field resolution', () => {
 
     it('+extraction.trace includes tried and stripped', async () => {
         const result = await runExtract(
-            parse({ fields: ['+extraction.trace'] }),
+            parseInput({ fields: ['+extraction.trace'] }),
             { fetcher: fakeFetcher(HTML_FULL) },
         );
         const extraction = result.extraction as Record<string, unknown>;
@@ -238,16 +143,19 @@ describe('field resolution', () => {
     });
 
     it('+actions_trace includes actions_trace in _meta', async () => {
-        const result = await runExtract(parse({ fields: ['+actions_trace'] }), {
-            fetcher: fakeFetcher(HTML_FULL),
-        });
+        const result = await runExtract(
+            parseInput({ fields: ['+actions_trace'] }),
+            {
+                fetcher: fakeFetcher(HTML_FULL),
+            },
+        );
         const meta = result._meta as Record<string, unknown>;
         expect(meta).toHaveProperty('actions_trace');
         expect(Array.isArray(meta.actions_trace)).toBe(true);
     });
 
     it('all includes every field group', async () => {
-        const result = await runExtract(parse({ fields: ['all'] }), {
+        const result = await runExtract(parseInput({ fields: ['all'] }), {
             fetcher: fakeFetcher(HTML_FULL),
         });
         // +meta
@@ -274,7 +182,7 @@ describe('field resolution', () => {
     });
 
     it('default (no fields) returns only the minimal section 4.1 shape', async () => {
-        const result = await runExtract(parse(), {
+        const result = await runExtract(parseInput(), {
             fetcher: fakeFetcher(HTML_FULL),
         });
 
@@ -317,7 +225,7 @@ describe('field resolution', () => {
 
 describe('content wrapping', () => {
     it('wraps content.markdown in <distilled_content> tags by default', async () => {
-        const result = await runExtract(parse(), {
+        const result = await runExtract(parseInput(), {
             fetcher: fakeFetcher(HTML_WITH_MAIN),
         });
         const content = result.content as Record<string, string>;
@@ -326,7 +234,7 @@ describe('content wrapping', () => {
     });
 
     it('omits <distilled_content> wrapping when raw_content is true', async () => {
-        const result = await runExtract(parse({ raw_content: true }), {
+        const result = await runExtract(parseInput({ raw_content: true }), {
             fetcher: fakeFetcher(HTML_WITH_MAIN),
         });
         const content = result.content as Record<string, string>;
@@ -341,7 +249,7 @@ describe('content wrapping', () => {
 
 describe('metadata', () => {
     it('_meta.schema_version is "1.0.0"', async () => {
-        const result = await runExtract(parse(), {
+        const result = await runExtract(parseInput(), {
             fetcher: fakeFetcher(HTML_WITH_MAIN),
         });
         const meta = result._meta as Record<string, unknown>;
@@ -349,7 +257,7 @@ describe('metadata', () => {
     });
 
     it('_meta.command is "extract"', async () => {
-        const result = await runExtract(parse(), {
+        const result = await runExtract(parseInput(), {
             fetcher: fakeFetcher(HTML_WITH_MAIN),
         });
         const meta = result._meta as Record<string, unknown>;
@@ -357,7 +265,7 @@ describe('metadata', () => {
     });
 
     it('_meta.from_cache reflects the fetcher return value', async () => {
-        const result = await runExtract(parse(), {
+        const result = await runExtract(parseInput(), {
             fetcher: fakeFetcher(HTML_WITH_MAIN, { fromCache: true }),
         });
         const meta = result._meta as Record<string, unknown>;
@@ -365,7 +273,7 @@ describe('metadata', () => {
     });
 
     it('word_count is correct', async () => {
-        const result = await runExtract(parse(), {
+        const result = await runExtract(parseInput(), {
             fetcher: fakeFetcher(HTML_WITH_MAIN),
         });
         expect(typeof result.word_count).toBe('number');
@@ -373,14 +281,14 @@ describe('metadata', () => {
     });
 
     it('title is extracted from <title> tag', async () => {
-        const result = await runExtract(parse(), {
+        const result = await runExtract(parseInput(), {
             fetcher: fakeFetcher(HTML_WITH_MAIN),
         });
         expect(result.title).toBe('Main Article');
     });
 
     it('url matches input and final_url matches fetcher', async () => {
-        const result = await runExtract(parse(), {
+        const result = await runExtract(parseInput(), {
             fetcher: fakeFetcher(HTML_WITH_MAIN, {
                 finalUrl: 'https://example.com/redirected',
             }),

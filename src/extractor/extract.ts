@@ -12,9 +12,13 @@ import type {
     ExtractOptions,
     FetchRequest,
     FetchResult,
+    LinkedomDocument,
 } from '#/extractor/pipeline.ts';
 import { extractWithHeuristic } from '#/extractor/strategies/heuristic.ts';
-import { extractWithSelectorChain } from '#/extractor/strategies/selector-chain.ts';
+import {
+    extractWithSelectorChain,
+    SELECTOR_CHAIN,
+} from '#/extractor/strategies/selector-chain.ts';
 import { stripChrome } from '#/extractor/strip-chrome.ts';
 import { renderText } from '#/extractor/text.ts';
 import { wrapContentFields } from '#/extractor/wrap-content.ts';
@@ -138,6 +142,47 @@ function extractImages(
 }
 
 /**
+ * Select extraction strategy: explicit → selector-chain → heuristic.
+ *
+ * Records all attempted selectors in `tried` for diagnostics
+ * (exposed via `+extraction.trace`).
+ */
+export function selectStrategy(
+    document: LinkedomDocument,
+    selector?: string,
+): ExtractionResult {
+    if (selector) {
+        const el = document.querySelector(selector);
+        if (!el) {
+            throw selectorNotFound(selector);
+        }
+        const blocks = domToBlocks(`<html><body>${el.innerHTML}</body></html>`);
+        const visibleText = blocks
+            .filter((b) => b.visibility === 'visible')
+            .reduce((sum, b) => sum + b.text.length, 0);
+        if (visibleText === 0) {
+            throw contentEmpty(selector);
+        }
+        return {
+            strategy: 'explicit',
+            selector,
+            blocks,
+            tried: [selector],
+        };
+    }
+
+    // Selector chain — delegates to extractWithSelectorChain which tracks tried
+    const chainResult = extractWithSelectorChain(document);
+    if (chainResult) {
+        return chainResult;
+    }
+
+    // Heuristic fallback — all chain selectors were tried and missed
+    const heuristicResult = extractWithHeuristic(document);
+    return { ...heuristicResult, tried: [...SELECTOR_CHAIN] };
+}
+
+/**
  * Run the full extract pipeline per DESIGN.md §6.
  *
  * Steps: validate URL → fetch → parse HTML → strip chrome →
@@ -175,37 +220,10 @@ export async function runExtract(
     const stripResult = stripChrome(document);
 
     // 5. Extraction strategy
-    let extraction: ExtractionResult;
-
-    if (input.selector) {
-        // Explicit strategy — use the provided selector
-        const el = document.querySelector(input.selector);
-        if (!el) {
-            throw selectorNotFound(input.selector);
-        }
-        const blocks = domToBlocks(`<html><body>${el.innerHTML}</body></html>`);
-        const visibleText = blocks
-            .filter((b) => b.visibility === 'visible')
-            .reduce((sum, b) => sum + b.text.length, 0);
-        if (visibleText === 0) {
-            throw contentEmpty(input.selector);
-        }
-        extraction = {
-            strategy: 'explicit',
-            selector: input.selector,
-            blocks,
-            tried: [input.selector],
-        };
-    } else {
-        // Selector chain, then heuristic fallback
-        const chainResult = extractWithSelectorChain(document);
-        if (chainResult) {
-            extraction = { ...chainResult, tried: [chainResult.selector] };
-        } else {
-            const heuristicResult = extractWithHeuristic(document);
-            extraction = { ...heuristicResult, tried: [] };
-        }
-    }
+    const extraction = (options?.selectStrategy ?? selectStrategy)(
+        document,
+        input.selector,
+    );
 
     // 6. Classify archetype
     const archetype = classifyArchetype(document, url, extraction.blocks);
