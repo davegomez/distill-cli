@@ -164,8 +164,12 @@ export async function fetchRaw(
     }
 
     // All retries exhausted — throw the last recorded error.
-    // biome-ignore lint/style/noNonNullAssertion: lastError is always set when loop runs more than once
-    throw lastError!;
+    if (!lastError) {
+        throw unknownError(
+            'fetch retry loop produced no error or response; this should be unreachable',
+        );
+    }
+    throw lastError;
 }
 
 // ---------------------------------------------------------------------------

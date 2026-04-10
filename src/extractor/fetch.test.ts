@@ -283,6 +283,21 @@ describe('fetchRaw', () => {
         expect(headers.cookie).toBe('session=abc123');
     });
 
+    it('negative retries throws a meaningful error, not undefined', async () => {
+        try {
+            await fetchRaw(`${baseUrl}/server-error`, { retries: -1 });
+            expect.unreachable('should have thrown');
+        } catch (err) {
+            expect(err).toMatchObject({
+                name: 'DistillError',
+                code: ErrorCode.UNKNOWN,
+            });
+            expect((err as { message: string }).message).toContain(
+                'fetch retry loop produced no error or response',
+            );
+        }
+    });
+
     it('DNS failure maps to DNS_FAILURE', async () => {
         try {
             await fetchRaw(
