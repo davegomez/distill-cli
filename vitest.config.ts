@@ -9,6 +9,7 @@ export default defineConfig({
             'src/**/*.test.ts',
             'test/unit/**/*.test.ts',
             'test/integration/**/*.test.ts',
+            'test/*.spec.ts',
         ],
         exclude: ['test/e2e/**', 'test/fixtures/**'],
         setupFiles: ['test/setup.ts'],
