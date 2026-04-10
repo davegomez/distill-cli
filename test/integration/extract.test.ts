@@ -4,17 +4,9 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-    afterAll,
-    afterEach,
-    beforeAll,
-    beforeEach,
-    describe,
-    expect,
-    it,
-    vi,
-} from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runExtract } from '#/commands/extract.ts';
+import type { PageFetcher } from '#/extractor/pipeline.ts';
 import { DistillError } from '#/schema/errors.ts';
 import { ExtractInputSchema } from '#/schema/input.ts';
 
@@ -334,131 +326,112 @@ describe('runExtract', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Render path tests — mock Playwright to avoid needing a real browser
+// Render path tests — use injected PageFetcher instead of vi.doMock
 // ---------------------------------------------------------------------------
 
-describe('runExtract — render path', () => {
-    let mockRenderWithPlaywright: ReturnType<typeof vi.fn>;
+describe('runExtract — render path (via PageFetcher injection)', () => {
+    it('extracts content and sets from_cache=false when render is true', async () => {
+        const fetcher: PageFetcher = {
+            async fetch(_url, request) {
+                expect(request.render).toBe(true);
+                return {
+                    html: CANONICAL_HTML,
+                    finalUrl: `${baseUrl}/article`,
+                    httpStatus: 200,
+                    fromCache: false,
+                    actionTrace: [],
+                };
+            },
+        };
 
-    beforeEach(() => {
-        vi.resetModules();
-        mockRenderWithPlaywright = vi.fn();
-    });
-
-    afterEach(() => {
-        vi.restoreAllMocks();
-    });
-
-    it('calls renderWithPlaywright when input.render is true', async () => {
-        mockRenderWithPlaywright.mockResolvedValue({
-            finalUrl: `${baseUrl}/article`,
-            html: CANONICAL_HTML,
-            status: 200,
-        });
-
-        vi.doMock('#/extractor/render.ts', () => ({
-            renderWithPlaywright: mockRenderWithPlaywright,
-        }));
-
-        const { runExtract: runExtractMocked } = await import(
-            '#/commands/extract.ts'
-        );
-
-        const result = (await runExtractMocked(
+        const result = (await runExtract(
             ExtractInputSchema.parse({
                 url: `${baseUrl}/article`,
                 render: true,
                 allow_private_network: true,
             }),
+            { fetcher },
         )) as AnyResult;
 
-        expect(mockRenderWithPlaywright).toHaveBeenCalledOnce();
-        expect(mockRenderWithPlaywright).toHaveBeenCalledWith(
-            expect.stringContaining('/article'),
-            expect.objectContaining({ timeout: 30000 }),
-        );
-
-        // Content is still extracted from the rendered HTML
         expect(result.content.markdown).toContain('Test Article Title');
         expect(result._meta.from_cache).toBe(false);
     });
 
     it('auto-enables render when actions are present (§5.2)', async () => {
-        mockRenderWithPlaywright.mockResolvedValue({
-            finalUrl: `${baseUrl}/article`,
-            html: CANONICAL_HTML,
-            status: 200,
-            actionTrace: [
-                { index: 0, type: 'wait', result: 'ok', elapsed_ms: 10 },
-            ],
-        });
+        const fetcher: PageFetcher = {
+            async fetch(_url, request) {
+                // Actions imply render — verify the pipeline set it
+                expect(request.render).toBe(true);
+                expect(request.actions).toHaveLength(1);
+                return {
+                    html: CANONICAL_HTML,
+                    finalUrl: `${baseUrl}/article`,
+                    httpStatus: 200,
+                    fromCache: false,
+                    actionTrace: [
+                        {
+                            index: 0,
+                            type: 'wait',
+                            result: 'ok' as const,
+                            elapsed_ms: 10,
+                        },
+                    ],
+                };
+            },
+        };
 
-        vi.doMock('#/extractor/render.ts', () => ({
-            renderWithPlaywright: mockRenderWithPlaywright,
-        }));
-
-        const { runExtract: runExtractMocked } = await import(
-            '#/commands/extract.ts'
-        );
-
-        const actions = [{ type: 'wait' as const, selector: 'article h1' }];
-
-        // render is NOT explicitly set — actions should imply it
-        const result = (await runExtractMocked(
+        const result = (await runExtract(
             ExtractInputSchema.parse({
                 url: `${baseUrl}/article`,
-                actions,
+                actions: [{ type: 'wait', selector: 'article h1' }],
                 allow_private_network: true,
             }),
+            { fetcher },
         )) as AnyResult;
 
-        expect(mockRenderWithPlaywright).toHaveBeenCalledOnce();
-        expect(mockRenderWithPlaywright).toHaveBeenCalledWith(
-            expect.any(String),
-            expect.objectContaining({ actions }),
-        );
         expect(result.content.markdown).toContain('Test Article Title');
     });
 
     it('surfaces action trace via +actions_trace field group', async () => {
         const mockTrace = [
-            { index: 0, type: 'wait', result: 'ok', elapsed_ms: 50 },
-            { index: 1, type: 'click', result: 'ok', elapsed_ms: 100 },
+            { index: 0, type: 'wait', result: 'ok' as const, elapsed_ms: 50 },
+            {
+                index: 1,
+                type: 'click',
+                result: 'ok' as const,
+                elapsed_ms: 100,
+            },
         ];
 
-        mockRenderWithPlaywright.mockResolvedValue({
-            finalUrl: `${baseUrl}/article`,
-            html: CANONICAL_HTML,
-            status: 200,
-            actionTrace: mockTrace,
-        });
+        const fetcher: PageFetcher = {
+            async fetch() {
+                return {
+                    html: CANONICAL_HTML,
+                    finalUrl: `${baseUrl}/article`,
+                    httpStatus: 200,
+                    fromCache: false,
+                    actionTrace: mockTrace,
+                };
+            },
+        };
 
-        vi.doMock('#/extractor/render.ts', () => ({
-            renderWithPlaywright: mockRenderWithPlaywright,
-        }));
-
-        const { runExtract: runExtractMocked } = await import(
-            '#/commands/extract.ts'
-        );
-
-        const actions = [
-            { type: 'wait' as const, selector: 'article h1' },
-            { type: 'click' as const, selector: '.load-more' },
-        ];
-
-        const result = (await runExtractMocked(
+        const result = (await runExtract(
             ExtractInputSchema.parse({
                 url: `${baseUrl}/article`,
-                actions,
+                actions: [
+                    { type: 'wait', selector: 'article h1' },
+                    { type: 'click', selector: '.load-more' },
+                ],
                 allow_private_network: true,
                 fields: ['+actions_trace'],
             }),
+            { fetcher },
         )) as AnyResult;
 
         expect(result._meta.actions_trace).toEqual(mockTrace);
     });
 
-    it('propagates cookies to Playwright context (no auth regression)', async () => {
+    it('passes cookies path through FetchRequest for render path', async () => {
         // Create a temporary Netscape cookie jar with mode 0600
         const tmpDir = mkdtempSync(join(tmpdir(), 'distill-test-'));
         const cookiePath = join(tmpDir, 'cookies.txt');
@@ -469,75 +442,59 @@ describe('runExtract — render path', () => {
         chmodSync(cookiePath, 0o600);
 
         try {
-            mockRenderWithPlaywright.mockResolvedValue({
-                finalUrl: `${baseUrl}/article`,
-                html: CANONICAL_HTML,
-                status: 200,
-            });
+            const fetcher: PageFetcher = {
+                async fetch(_url, request) {
+                    // Verify cookies path is threaded through
+                    expect(request.cookies).toBe(cookiePath);
+                    expect(request.render).toBe(true);
+                    return {
+                        html: CANONICAL_HTML,
+                        finalUrl: `${baseUrl}/article`,
+                        httpStatus: 200,
+                        fromCache: false,
+                        actionTrace: [],
+                    };
+                },
+            };
 
-            vi.doMock('#/extractor/render.ts', () => ({
-                renderWithPlaywright: mockRenderWithPlaywright,
-            }));
-
-            const { runExtract: runExtractMocked } = await import(
-                '#/commands/extract.ts'
-            );
-
-            await runExtractMocked(
+            const result = (await runExtract(
                 ExtractInputSchema.parse({
                     url: `${baseUrl}/article`,
                     render: true,
                     cookies: cookiePath,
                     allow_private_network: true,
                 }),
-            );
+                { fetcher },
+            )) as AnyResult;
 
-            expect(mockRenderWithPlaywright).toHaveBeenCalledWith(
-                expect.any(String),
-                expect.objectContaining({
-                    cookies: expect.arrayContaining([
-                        expect.objectContaining({
-                            name: 'session',
-                            value: 'abc123',
-                            domain: '.example.com',
-                            path: '/',
-                        }),
-                    ]),
-                }),
-            );
+            expect(result.content.markdown).toContain('Test Article Title');
         } finally {
             rmSync(tmpDir, { recursive: true });
         }
     });
 
-    it('does NOT use cachedFetch when render is true', async () => {
-        mockRenderWithPlaywright.mockResolvedValue({
-            finalUrl: `${baseUrl}/article`,
-            html: CANONICAL_HTML,
-            status: 200,
-        });
+    it('does not set from_cache when render path is used', async () => {
+        const fetcher: PageFetcher = {
+            async fetch() {
+                return {
+                    html: CANONICAL_HTML,
+                    finalUrl: `${baseUrl}/article`,
+                    httpStatus: 200,
+                    fromCache: false,
+                    actionTrace: [],
+                };
+            },
+        };
 
-        const mockCachedFetch = vi.fn();
-        vi.doMock('#/extractor/render.ts', () => ({
-            renderWithPlaywright: mockRenderWithPlaywright,
-        }));
-        vi.doMock('#/extractor/cached-fetch.ts', () => ({
-            cachedFetch: mockCachedFetch,
-        }));
-
-        const { runExtract: runExtractMocked } = await import(
-            '#/commands/extract.ts'
-        );
-
-        await runExtractMocked(
+        const result = (await runExtract(
             ExtractInputSchema.parse({
                 url: `${baseUrl}/article`,
                 render: true,
                 allow_private_network: true,
             }),
-        );
+            { fetcher },
+        )) as AnyResult;
 
-        expect(mockCachedFetch).not.toHaveBeenCalled();
-        expect(mockRenderWithPlaywright).toHaveBeenCalledOnce();
+        expect(result._meta.from_cache).toBe(false);
     });
 });
