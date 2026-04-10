@@ -4,9 +4,9 @@
     "archetype": "docs",
     "expected": {
         "title": "File system | Node.js v25.9.0 Documentation",
-        "strategy": "heuristic",
-        "selector": null,
-        "confidence": "low",
+        "strategy": "selector",
+        "selector": "[role=\"main\"]",
+        "confidence": "high",
         "word_count_range": [25000, 42000],
         "must_contain": [
             "fs.readFile",
@@ -21,5 +21,5 @@
             "Deprecated APIs Diagnostics Channel DNS Domain"
         ]
     },
-    "notes": "Node.js docs use <div id=\"apicontent\"> for the main content and <div role=\"navigation\" id=\"column2\"> for the sidebar TOC. The selector chain has no matching selector (no main/article/role=main/#content). The heuristic fallback must score the #apicontent div above the navigation column to extract correctly. Chrome stripping should remove the role=navigation sidebar. The must_not_contain entries are the navigation list of all Node.js modules — if they appear, chrome stripping failed."
+    "notes": "Node.js docs wrap the api content area with role=\"main\" (on <div id=\"apicontent\">), so the selector chain matches on [role=\"main\"] after the main → article → [role=\"main\"] cascade. The navigation sidebar lives in <div role=\"navigation\" id=\"column2\"> which stripChrome removes before extraction. The original curation mistakenly assumed no semantic selector would match because a naive exact-quote grep missed the role attribute — the real HTML has role=\"main\" and the strategy is correctly `selector`, not `heuristic`."
 }
