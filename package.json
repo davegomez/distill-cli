@@ -6,6 +6,11 @@
     "engines": {
         "node": ">=24"
     },
+    "files": [
+        "bin",
+        "src",
+        "skills"
+    ],
     "bin": {
         "distill": "./bin/distill"
     },
@@ -24,7 +29,7 @@
         "test:watch": "vitest",
         "test:e2e": "DISTILL_E2E=1 vitest run --config vitest.e2e.config.ts",
         "eval": "tsx test/eval.ts",
-        "eval:compare": "tsx test/eval.ts --compare"
+        "eval:compare": "tsx test/eval-compare.ts"
     },
     "pnpm": {
         "onlyBuiltDependencies": [
@@ -43,7 +48,9 @@
     },
     "devDependencies": {
         "@biomejs/biome": "^2.4.11",
+        "@mozilla/readability": "^0.6.0",
         "@types/node": "^25.5.2",
+        "defuddle": "^0.15.0",
         "lefthook": "^2.1.5",
         "tsx": "^4.21.0",
         "typescript": "^6.0.2",

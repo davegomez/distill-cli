@@ -11,3 +11,4 @@ test-results/
 playwright-report/
 local.db
 CONFLICTS.md
+test/fixtures/comparison.json
