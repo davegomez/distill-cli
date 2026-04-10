@@ -105,25 +105,28 @@ export async function renderWithPlaywright(
         }
 
         const page = await context.newPage();
-        const response = await page.goto(url, {
-            waitUntil: 'networkidle',
-            timeout,
-        });
+        try {
+            const response = await page.goto(url, {
+                waitUntil: 'networkidle',
+                timeout,
+            });
 
-        // Execute actions after page load, before content extraction (§5)
-        let actionTrace: ActionTraceEntry[] | undefined;
-        if (actions && actions.length > 0) {
-            const result = await executeActions(page, actions);
-            actionTrace = result.trace;
+            // Execute actions after page load, before content extraction (§5)
+            let actionTrace: ActionTraceEntry[] | undefined;
+            if (actions && actions.length > 0) {
+                const result = await executeActions(page, actions);
+                actionTrace = result.trace;
+            }
+
+            const finalUrl = response?.url() ?? page.url();
+            const status = response?.status();
+            const html = await page.content();
+
+            return { finalUrl, html, status, actionTrace };
+        } finally {
+            await page.close().catch(() => {});
+            await context.close().catch(() => {});
         }
-
-        const finalUrl = response?.url() ?? page.url();
-        const status = response?.status();
-        const html = await page.content();
-
-        await context.close();
-
-        return { finalUrl, html, status, actionTrace };
     } finally {
         await browser.close();
     }

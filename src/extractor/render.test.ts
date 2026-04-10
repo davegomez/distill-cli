@@ -81,6 +81,51 @@ describe('renderWithPlaywright — error classification', () => {
         }
     });
 
+    it('closes the page even when executeActions throws', async () => {
+        const pageCloseSpy = vi.fn().mockResolvedValue(undefined);
+        const contextCloseSpy = vi.fn().mockResolvedValue(undefined);
+        const browserCloseSpy = vi.fn().mockResolvedValue(undefined);
+
+        vi.doMock('playwright', () => ({
+            chromium: {
+                launch: vi.fn().mockResolvedValue({
+                    newContext: vi.fn().mockResolvedValue({
+                        addCookies: vi.fn(),
+                        newPage: vi.fn().mockResolvedValue({
+                            goto: vi.fn().mockResolvedValue({
+                                url: () => 'https://example.com',
+                                status: () => 200,
+                            }),
+                            content: vi.fn().mockResolvedValue('<html></html>'),
+                            url: () => 'https://example.com',
+                            close: pageCloseSpy,
+                        }),
+                        close: contextCloseSpy,
+                    }),
+                    close: browserCloseSpy,
+                }),
+            },
+        }));
+
+        vi.doMock('#/extractor/actions.ts', () => ({
+            executeActions: vi
+                .fn()
+                .mockRejectedValue(new Error('action failed')),
+        }));
+
+        const { renderWithPlaywright } = await import('#/extractor/render.ts');
+
+        await expect(
+            renderWithPlaywright('https://example.com', {
+                actions: [{ type: 'wait', selector: '#foo' }],
+            }),
+        ).rejects.toThrow('action failed');
+
+        expect(pageCloseSpy).toHaveBeenCalledOnce();
+        expect(contextCloseSpy).toHaveBeenCalledOnce();
+        expect(browserCloseSpy).toHaveBeenCalledOnce();
+    });
+
     it('throws BROWSER_LAUNCH_FAILED for unknown launch errors', async () => {
         vi.doMock('playwright', () => ({
             chromium: {
