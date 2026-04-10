@@ -172,8 +172,13 @@ async function runScroll(
     action: Extract<Action, { type: 'scroll' }>,
 ): Promise<void> {
     if ('to' in action) {
-        const y = action.to === 'bottom' ? 'document.body.scrollHeight' : '0';
-        await page.evaluate(`window.scrollTo(0, ${y})`);
+        if (action.to === 'bottom') {
+            // @ts-expect-error — runs in browser context; DOM globals exist at runtime
+            await page.evaluate(() => scrollTo(0, document.body.scrollHeight));
+        } else {
+            // @ts-expect-error — runs in browser context; DOM globals exist at runtime
+            await page.evaluate(() => scrollTo(0, 0));
+        }
         return;
     }
     if ('selector' in action) {

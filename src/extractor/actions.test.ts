@@ -222,6 +222,28 @@ describe('executeActions', () => {
         ).toHaveBeenCalledWith('article h1', { timeout: 30_000 });
     });
 
+    it('scroll action calls page.evaluate with a function, not a string', async () => {
+        const page = createMockPage();
+        const actions: Action[] = [{ type: 'scroll', to: 'bottom' }];
+
+        await executeActions(page, actions);
+
+        const evaluateSpy = page.evaluate as ReturnType<typeof vi.fn>;
+        expect(evaluateSpy).toHaveBeenCalledTimes(1);
+        expect(typeof evaluateSpy.mock.calls[0][0]).toBe('function');
+    });
+
+    it('scroll to top calls page.evaluate with a function', async () => {
+        const page = createMockPage();
+        const actions: Action[] = [{ type: 'scroll', to: 'top' }];
+
+        await executeActions(page, actions);
+
+        const evaluateSpy = page.evaluate as ReturnType<typeof vi.fn>;
+        expect(evaluateSpy).toHaveBeenCalledTimes(1);
+        expect(typeof evaluateSpy.mock.calls[0][0]).toBe('function');
+    });
+
     it('maps wait for network-idle to Playwright networkidle', async () => {
         const page = createMockPage();
         const actions: Action[] = [{ type: 'wait', for: 'network-idle' }];
