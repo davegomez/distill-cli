@@ -180,6 +180,95 @@ describe('stripChrome', () => {
         expect(bodyText(d)).toBe('Content');
     });
 
+    it('removes link-dense sidebar via path A (>70% link density)', () => {
+        const d = doc(
+            `<div>
+                <a href="/a">Home</a>
+                <a href="/b">About</a>
+                <a href="/c">Docs</a>
+                <a href="/d">Blog</a>
+                <a href="/e">FAQ</a>
+            </div>
+            <p>Main content</p>`,
+        );
+        const result = stripChrome(d);
+
+        expect(result.stripped.nav).toBe(1);
+        expect(bodyText(d)).toBe('Main content');
+    });
+
+    it('removes version-list sidebar via path B (many short links)', () => {
+        const d = doc(
+            `<div>
+                Supported Versions:
+                <a href="/v18">18</a> /
+                <a href="/v17">17</a> /
+                <a href="/v16">16</a> /
+                <a href="/v15">15</a> /
+                <a href="/v14">14</a> /
+                <a href="/v13">13</a> /
+                <a href="/v12">12</a> /
+                <a href="/v11">11</a>
+            </div>
+            <p>Article body</p>`,
+        );
+        const result = stripChrome(d);
+
+        expect(result.stripped.nav).toBe(1);
+        expect(bodyText(d)).toBe('Article body');
+    });
+
+    it('preserves link-dense content inside <article>', () => {
+        const d = doc(
+            `<article>
+                <div>
+                    <a href="/a">One</a> /
+                    <a href="/b">Two</a> /
+                    <a href="/c">Three</a> /
+                    <a href="/d">Four</a> /
+                    <a href="/e">Five</a> /
+                    <a href="/f">Six</a> /
+                    <a href="/g">Seven</a> /
+                    <a href="/h">Eight</a>
+                </div>
+            </article>`,
+        );
+        const result = stripChrome(d);
+
+        expect(result.stripped.nav).toBe(0);
+        expect(bodyText(d)).toContain('One');
+    });
+
+    it('preserves div with links when <p> descendants exist', () => {
+        const d = doc(
+            `<div>
+                <p>See the following references for more info:</p>
+                <a href="/a">Link 1</a>
+                <a href="/b">Link 2</a>
+                <a href="/c">Link 3</a>
+                <a href="/d">Link 4</a>
+                <a href="/e">Link 5</a>
+            </div>`,
+        );
+        const result = stripChrome(d);
+
+        expect(result.stripped.nav).toBe(0);
+        expect(bodyText(d)).toContain('See the following');
+    });
+
+    it('preserves div with fewer than 5 links', () => {
+        const d = doc(
+            `<div>
+                <a href="/a">A</a> / <a href="/b">B</a> / <a href="/c">C</a>
+            </div>
+            <p>Content</p>`,
+        );
+        const result = stripChrome(d);
+
+        expect(result.stripped.nav).toBe(0);
+        expect(bodyText(d)).toContain('A');
+    });
+
     it('returns accurate stripping metadata counts', () => {
         const d = doc(
             `<script>x</script>

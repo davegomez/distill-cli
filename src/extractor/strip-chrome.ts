@@ -77,6 +77,27 @@ function containsOnlyLinks(el: DomElement): boolean {
     return el.querySelectorAll('a').length > 0;
 }
 
+/** Minimum number of links for the link-density sidebar heuristic. */
+const LINK_DENSITY_MIN_LINKS = 5;
+
+/** Minimum link-text-to-total-text ratio to classify as a link-dense sidebar. */
+const LINK_DENSITY_THRESHOLD = 0.7;
+
+/**
+ * Compute link density: ratio of link text length to total text length.
+ * Returns 0 for empty elements.
+ */
+function linkDensity(el: DomElement): number {
+    const total = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+    if (total.length === 0) return 0;
+
+    let linkLen = 0;
+    for (const a of el.querySelectorAll('a')) {
+        linkLen += (a.textContent ?? '').replace(/\s+/g, ' ').trim().length;
+    }
+    return linkLen / total.length;
+}
+
 const COOKIE_RE = /cookie|consent|gdpr|ccpa/i;
 const SOCIAL_RE = /share|social|tweet|facebook|linkedin/i;
 const AD_RE = /\bads?\b|sponsor/i;
@@ -164,6 +185,48 @@ export function stripChrome(document: LinkedomDocument): StripChromeResult {
             const cls = el.getAttribute('class') ?? '';
             if (AD_RE.test(id) || AD_RE.test(cls)) {
                 if (el.parentElement) counts.ads += remove(el);
+            }
+        }
+    }
+
+    // 9. Link-density sidebar detection — remove <div>/<ul> elements that
+    //    look like navigation sidebars: high link density, no <p> prose,
+    //    and enough links to rule out incidental link clusters.
+    //    Two paths:
+    //    A) link density > 70% with ≥ 5 links
+    //    B) ≥ 8 links with short average link text (≤ 5 chars) and link
+    //       density > 30% — catches version/category lists where separators
+    //       dilute the raw density ratio.
+    if (body) {
+        for (const el of [...body.querySelectorAll('div, ul')]) {
+            if (!el.parentElement) continue;
+            if (isInsideArticle(el)) continue;
+
+            const links = [...el.querySelectorAll('a')];
+            if (links.length < LINK_DENSITY_MIN_LINKS) continue;
+
+            // Presence of <p> descendants is a strong prose signal — keep.
+            if ([...el.querySelectorAll('p')].length > 0) continue;
+
+            const density = linkDensity(el);
+
+            // Path A: straightforward high link density
+            if (density > LINK_DENSITY_THRESHOLD) {
+                counts.nav += remove(el);
+                continue;
+            }
+
+            // Path B: version/category list — many short-text links
+            if (links.length >= 8 && density > 0.2) {
+                let totalLinkLen = 0;
+                for (const a of links) {
+                    totalLinkLen += (a.textContent ?? '')
+                        .replace(/\s+/g, ' ')
+                        .trim().length;
+                }
+                if (totalLinkLen / links.length <= 5) {
+                    counts.nav += remove(el);
+                }
             }
         }
     }
