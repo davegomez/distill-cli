@@ -1,5 +1,21 @@
 import type { ActionTraceEntry } from '#/extractor/actions.ts';
+import type { Block } from '#/extractor/blocks.ts';
 import type { Action } from '#/schema/input.ts';
+
+// ---------------------------------------------------------------------------
+// Shared pipeline types
+// ---------------------------------------------------------------------------
+
+/** Extraction strategy used to identify content. */
+export type Strategy = 'explicit' | 'selector' | 'heuristic';
+
+/** Result of the strategy selection phase. */
+export interface ExtractionResult {
+    strategy: Strategy;
+    selector: string | null;
+    blocks: Block[];
+    tried: string[];
+}
 
 // ---------------------------------------------------------------------------
 // Port interfaces — the I/O seam for the extraction pipeline

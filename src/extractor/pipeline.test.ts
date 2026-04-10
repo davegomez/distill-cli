@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runExtract } from '#/commands/extract.ts';
+import { runExtract } from '#/extractor/extract.ts';
 import type { FetchResult, PageFetcher } from '#/extractor/pipeline.ts';
 import { ExtractInputSchema } from '#/schema/input.ts';
 

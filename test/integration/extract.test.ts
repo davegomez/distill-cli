@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { runExtract } from '#/commands/extract.ts';
+import { runExtract } from '#/extractor/extract.ts';
 import type { PageFetcher } from '#/extractor/pipeline.ts';
 import { DistillError } from '#/schema/errors.ts';
 import { ExtractInputSchema } from '#/schema/input.ts';

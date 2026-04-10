@@ -1,6 +1,6 @@
 import type { Block } from '#/extractor/blocks.ts';
+import type { Strategy } from '#/extractor/pipeline.ts';
 
-type Strategy = 'explicit' | 'selector' | 'heuristic';
 type Confidence = 'high' | 'medium' | 'low';
 
 /** Raw observables for the +extraction.metrics field group. */

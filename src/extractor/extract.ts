@@ -2,21 +2,17 @@ import { parseHTML } from 'linkedom';
 import { classifyArchetype } from '#/extractor/archetype.ts';
 import type { Block } from '#/extractor/blocks.ts';
 import { domToBlocks } from '#/extractor/blocks.ts';
-import {
-    type CachedFetchOptions,
-    cachedFetch,
-} from '#/extractor/cached-fetch.ts';
 import { computeConfidence, computeMetrics } from '#/extractor/confidence.ts';
+import { defaultPageFetcher } from '#/extractor/default-fetcher.ts';
 import { type FullExtractResult, resolveFields } from '#/extractor/fields.ts';
 import { renderHtml } from '#/extractor/html.ts';
 import { renderMarkdown } from '#/extractor/markdown.ts';
 import type {
+    ExtractionResult,
     ExtractOptions,
     FetchRequest,
     FetchResult,
-    PageFetcher,
 } from '#/extractor/pipeline.ts';
-import { renderWithPlaywright } from '#/extractor/render.ts';
 import { extractWithHeuristic } from '#/extractor/strategies/heuristic.ts';
 import { extractWithSelectorChain } from '#/extractor/strategies/selector-chain.ts';
 import { stripChrome } from '#/extractor/strip-chrome.ts';
@@ -29,16 +25,7 @@ import {
     unknownError,
 } from '#/schema/errors.ts';
 import type { ExtractInput } from '#/schema/input.ts';
-import { loadCookiesFile } from '#/security/cookies.ts';
 import { validateUrl } from '#/security/url.ts';
-
-type Strategy = 'explicit' | 'selector' | 'heuristic';
-
-interface ExtractionResult {
-    strategy: Strategy;
-    selector: string | null;
-    blocks: Block[];
-}
 
 /** Parse "K: V" header strings into a Record. */
 function parseHeaders(
@@ -72,6 +59,22 @@ function parseSize(size: string): number {
         default:
             return 50 * 1024 * 1024;
     }
+}
+
+/** Map ExtractInput to the narrow FetchRequest the fetcher needs. */
+export function toFetchRequest(input: ExtractInput): FetchRequest {
+    return {
+        render: input.render,
+        headers: parseHeaders(input.header),
+        cookies: input.cookies,
+        userAgent: input.user_agent,
+        timeout: input.timeout,
+        maxSize: parseSize(input.max_size),
+        retries: input.retries,
+        noCache: input.no_cache,
+        refresh: input.refresh,
+        actions: input.actions,
+    };
 }
 
 /** Get the title from a parsed document. */
@@ -116,86 +119,6 @@ function extractPageMeta(document: ReturnType<typeof parseHTML>['document']): {
         site_name: metaContent('og:site_name'),
     };
 }
-
-/** Collect unique links from extraction blocks for the +links group. */
-function extractLinks(): Array<{ text: string; href: string; rel?: string }> {
-    // Blocks don't currently carry link data, so we return an empty array.
-    // This will be populated when block-level link extraction is implemented.
-    // The field resolver still works — it just passes through whatever is here.
-    return [];
-}
-
-// ---------------------------------------------------------------------------
-// Default PageFetcher — routes to cachedFetch or renderWithPlaywright
-// ---------------------------------------------------------------------------
-
-/** Map ExtractInput to the narrow FetchRequest the fetcher needs. */
-function toFetchRequest(input: ExtractInput): FetchRequest {
-    return {
-        render: input.render,
-        headers: parseHeaders(input.header),
-        cookies: input.cookies,
-        userAgent: input.user_agent,
-        timeout: input.timeout,
-        maxSize: parseSize(input.max_size),
-        retries: input.retries,
-        noCache: input.no_cache,
-        refresh: input.refresh,
-        actions: input.actions,
-    };
-}
-
-/** Production PageFetcher that delegates to cachedFetch or renderWithPlaywright. */
-const defaultPageFetcher: PageFetcher = {
-    async fetch(url: URL, request: FetchRequest): Promise<FetchResult> {
-        if (request.render) {
-            const cookies = request.cookies
-                ? await loadCookiesFile(request.cookies)
-                : undefined;
-
-            const renderResult = await renderWithPlaywright(url.href, {
-                headers: request.headers,
-                cookies: cookies?.map((c) => ({
-                    name: c.name,
-                    value: c.value,
-                    domain: c.domain,
-                    path: c.path,
-                })),
-                userAgent: request.userAgent,
-                timeout: request.timeout,
-                actions: request.actions,
-            });
-
-            return {
-                html: renderResult.html,
-                finalUrl: renderResult.finalUrl,
-                httpStatus: renderResult.status ?? 200,
-                fromCache: false,
-                actionTrace: renderResult.actionTrace ?? [],
-            };
-        }
-
-        const fetchOpts: CachedFetchOptions = {
-            headers: request.headers,
-            userAgent: request.userAgent,
-            timeout: request.timeout,
-            maxSize: request.maxSize,
-            retries: request.retries,
-            noCache: request.noCache,
-            refresh: request.refresh,
-        };
-
-        const fetchResult = await cachedFetch(url.href, fetchOpts);
-
-        return {
-            html: fetchResult.body.toString('utf-8'),
-            finalUrl: fetchResult.finalUrl,
-            httpStatus: fetchResult.status,
-            fromCache: fetchResult._meta.from_cache,
-            actionTrace: [],
-        };
-    },
-};
 
 /** Collect unique images from extraction blocks for the +images group. */
 function extractImages(
@@ -253,7 +176,6 @@ export async function runExtract(
 
     // 5. Extraction strategy
     let extraction: ExtractionResult;
-    const triedSelectors: string[] = [];
 
     if (input.selector) {
         // Explicit strategy — use the provided selector
@@ -268,19 +190,20 @@ export async function runExtract(
         if (visibleText === 0) {
             throw contentEmpty(input.selector);
         }
-        triedSelectors.push(input.selector);
         extraction = {
             strategy: 'explicit',
             selector: input.selector,
             blocks,
+            tried: [input.selector],
         };
     } else {
         // Selector chain, then heuristic fallback
         const chainResult = extractWithSelectorChain(document);
         if (chainResult) {
-            extraction = chainResult;
+            extraction = { ...chainResult, tried: [chainResult.selector] };
         } else {
-            extraction = extractWithHeuristic(document);
+            const heuristicResult = extractWithHeuristic(document);
+            extraction = { ...heuristicResult, tried: [] };
         }
     }
 
@@ -304,8 +227,7 @@ export async function runExtract(
     // 10. Extract page metadata for +meta
     const meta = extractPageMeta(document);
 
-    // 11. Extract links and images for +links / +images
-    const links = extractLinks();
+    // 11. Extract images for +images (links deferred to block-level extraction)
     const images = extractImages(extraction.blocks);
 
     // 12. Build full result
@@ -337,7 +259,7 @@ export async function runExtract(
             confidence,
             archetype,
             metrics,
-            tried: triedSelectors,
+            tried: extraction.tried,
             stripped: stripResult.stripped,
         },
         warnings: [],
@@ -346,7 +268,7 @@ export async function runExtract(
         published: meta.published,
         language: meta.language,
         site_name: meta.site_name,
-        links,
+        links: [],
         images,
     };
 
