@@ -110,7 +110,7 @@ export const ExtractionMetricsSchema = z.object({
 export const ExtractionTraceSchema = z.object({
     extraction: z.object({
         tried: z.array(z.string()),
-        stripped: z.record(z.string(), z.unknown()),
+        stripped: z.record(z.string(), z.number()),
     }),
 });
 

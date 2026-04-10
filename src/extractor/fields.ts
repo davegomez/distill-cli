@@ -32,7 +32,7 @@ export interface FullExtractResult extends ExtractOutput {
             link_density: number;
         };
         tried: string[];
-        stripped: Record<string, unknown>;
+        stripped: Record<string, number>;
     };
 
     /** +actions_trace — nested under _meta */

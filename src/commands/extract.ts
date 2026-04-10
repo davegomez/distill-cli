@@ -108,13 +108,10 @@ function extractPageMeta(document: ReturnType<typeof parseHTML>['document']): {
 }
 
 /** Collect unique links from extraction blocks for the +links group. */
-function extractLinks(
-    blocks: Block[],
-): Array<{ text: string; href: string; rel?: string }> {
+function extractLinks(): Array<{ text: string; href: string; rel?: string }> {
     // Blocks don't currently carry link data, so we return an empty array.
     // This will be populated when block-level link extraction is implemented.
     // The field resolver still works — it just passes through whatever is here.
-    void blocks;
     return [];
 }
 
@@ -265,7 +262,7 @@ export async function runExtract(
     const meta = extractPageMeta(document);
 
     // 11. Extract links and images for +links / +images
-    const links = extractLinks(extraction.blocks);
+    const links = extractLinks();
     const images = extractImages(extraction.blocks);
 
     // 12. Build full result
@@ -298,10 +295,7 @@ export async function runExtract(
             archetype,
             metrics,
             tried: triedSelectors,
-            stripped: stripResult.stripped as unknown as Record<
-                string,
-                unknown
-            >,
+            stripped: stripResult.stripped,
         },
         warnings: [],
         description: meta.description,

@@ -25,7 +25,7 @@ interface DomNode {
 }
 
 /** Counts of elements removed by category. */
-export interface StrippedCounts {
+export type StrippedCounts = {
     nav: number;
     header: number;
     footer: number;
@@ -35,7 +35,7 @@ export interface StrippedCounts {
     ads: number;
     cookie_banners: number;
     social_widgets: number;
-}
+};
 
 /** Result returned by stripChrome. */
 export interface StripChromeResult {
