@@ -20,6 +20,7 @@ function makeEntry(
     overrides?: Partial<Omit<CacheEntry, 'key' | 'expires_at'>>,
 ): Omit<CacheEntry, 'key' | 'expires_at'> {
     return {
+        url: 'https://example.com',
         status: 200,
         headers: { 'content-type': 'text/html' },
         body: Buffer.from('<h1>Hello</h1>'),

@@ -102,6 +102,7 @@ export async function cachedFetch(
     cache.set(
         key,
         {
+            url,
             status: result.status,
             headers: result.headers,
             body: result.body,

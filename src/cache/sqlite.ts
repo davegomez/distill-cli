@@ -10,6 +10,7 @@ import { DatabaseSync } from 'node:sqlite';
 
 export interface CacheEntry {
     key: string;
+    url: string;
     status: number;
     headers: Record<string, string>;
     body: Buffer;
@@ -20,6 +21,7 @@ export interface CacheEntry {
 
 export interface CacheEntrySummary {
     key: string;
+    url: string;
     status: number;
     content_type: string;
     size: number;
@@ -29,6 +31,7 @@ export interface CacheEntrySummary {
 
 export interface ClearOptions {
     olderThan?: number;
+    urlPattern?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +109,7 @@ export class HttpCache {
         this.db.exec(`
 			CREATE TABLE IF NOT EXISTS cache (
 				key TEXT PRIMARY KEY,
+				url TEXT NOT NULL DEFAULT '',
 				status INTEGER NOT NULL,
 				headers TEXT NOT NULL,
 				body BLOB NOT NULL,
@@ -114,16 +118,25 @@ export class HttpCache {
 				content_type TEXT NOT NULL
 			)
 		`);
+        // Add url column to pre-existing tables that lack it.
+        try {
+            this.db.exec(
+                "ALTER TABLE cache ADD COLUMN url TEXT NOT NULL DEFAULT ''",
+            );
+        } catch {
+            // Column already exists — ignore.
+        }
     }
 
     /** Retrieve a cached entry. Returns undefined if missing or expired. */
     get(key: string): CacheEntry | undefined {
         const stmt = this.db.prepare(
-            'SELECT key, status, headers, body, fetched_at, expires_at, content_type FROM cache WHERE key = ?',
+            'SELECT key, url, status, headers, body, fetched_at, expires_at, content_type FROM cache WHERE key = ?',
         );
         const row = stmt.get(key) as
             | {
                   key: string;
+                  url: string;
                   status: number;
                   headers: string;
                   body: Uint8Array;
@@ -139,6 +152,7 @@ export class HttpCache {
 
         return {
             key: row.key,
+            url: row.url,
             status: row.status,
             headers: JSON.parse(row.headers) as Record<string, string>,
             body: Buffer.from(row.body),
@@ -163,11 +177,12 @@ export class HttpCache {
         const expiresAt = entry.fetched_at + effectiveTtl;
 
         const stmt = this.db.prepare(`
-			INSERT OR REPLACE INTO cache (key, status, headers, body, fetched_at, expires_at, content_type)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
+			INSERT OR REPLACE INTO cache (key, url, status, headers, body, fetched_at, expires_at, content_type)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		`);
         stmt.run(
             key,
+            entry.url,
             entry.status,
             JSON.stringify(entry.headers),
             entry.body,
@@ -187,11 +202,12 @@ export class HttpCache {
     /** Return a summary of all cached entries, optionally filtered by key pattern. */
     list(filter?: string): CacheEntrySummary[] {
         const query = filter
-            ? 'SELECT key, status, content_type, length(body) as size, fetched_at, expires_at FROM cache WHERE key LIKE ?'
-            : 'SELECT key, status, content_type, length(body) as size, fetched_at, expires_at FROM cache';
+            ? 'SELECT key, url, status, content_type, length(body) as size, fetched_at, expires_at FROM cache WHERE key LIKE ?'
+            : 'SELECT key, url, status, content_type, length(body) as size, fetched_at, expires_at FROM cache';
         const stmt = this.db.prepare(query);
         const rows = (filter ? stmt.all(filter) : stmt.all()) as Array<{
             key: string;
+            url: string;
             status: number;
             content_type: string;
             size: number;
@@ -200,6 +216,7 @@ export class HttpCache {
         }>;
         return rows.map((r) => ({
             key: r.key,
+            url: r.url,
             status: r.status,
             content_type: r.content_type,
             size: r.size,
@@ -208,17 +225,24 @@ export class HttpCache {
         }));
     }
 
-    /** Clear entries. If olderThan is provided, only prune entries fetched before that timestamp. */
+    /** Clear entries. Supports filtering by age and/or URL pattern (SQL LIKE). */
     clear(opts?: ClearOptions): number {
+        const conditions: string[] = [];
+        const params: (string | number)[] = [];
+
         if (opts?.olderThan != null) {
-            const stmt = this.db.prepare(
-                'DELETE FROM cache WHERE fetched_at < ?',
-            );
-            const result = stmt.run(opts.olderThan);
-            return Number(result.changes);
+            conditions.push('fetched_at < ?');
+            params.push(opts.olderThan);
         }
-        const stmt = this.db.prepare('DELETE FROM cache');
-        const result = stmt.run();
+        if (opts?.urlPattern) {
+            conditions.push('url LIKE ?');
+            params.push(opts.urlPattern);
+        }
+
+        const where =
+            conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+        const stmt = this.db.prepare(`DELETE FROM cache${where}`);
+        const result = stmt.run(...params);
         return Number(result.changes);
     }
 
