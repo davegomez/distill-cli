@@ -692,6 +692,7 @@ distill-cli/
 │   │   ├── doctor.ts
 │   │   └── cache.ts
 │   ├── extractor/
+│   │   ├── pipeline.ts        # PageFetcher port interface + default impl
 │   │   ├── fetch.ts           # raw HTTP + retries + caching
 │   │   ├── render.ts          # Playwright wrapper
 │   │   ├── actions.ts         # --actions DSL executor
