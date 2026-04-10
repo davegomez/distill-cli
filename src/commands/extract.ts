@@ -1,5 +1,4 @@
 import { parseHTML } from 'linkedom';
-import type { ActionTraceEntry } from '#/extractor/actions.ts';
 import { classifyArchetype } from '#/extractor/archetype.ts';
 import type { Block } from '#/extractor/blocks.ts';
 import { domToBlocks } from '#/extractor/blocks.ts';
@@ -11,13 +10,24 @@ import { computeConfidence, computeMetrics } from '#/extractor/confidence.ts';
 import { type FullExtractResult, resolveFields } from '#/extractor/fields.ts';
 import { renderHtml } from '#/extractor/html.ts';
 import { renderMarkdown } from '#/extractor/markdown.ts';
+import type {
+    ExtractOptions,
+    FetchRequest,
+    FetchResult,
+    PageFetcher,
+} from '#/extractor/pipeline.ts';
 import { renderWithPlaywright } from '#/extractor/render.ts';
 import { extractWithHeuristic } from '#/extractor/strategies/heuristic.ts';
 import { extractWithSelectorChain } from '#/extractor/strategies/selector-chain.ts';
 import { stripChrome } from '#/extractor/strip-chrome.ts';
 import { renderText } from '#/extractor/text.ts';
 import { wrapContentFields } from '#/extractor/wrap-content.ts';
-import { contentEmpty, selectorNotFound } from '#/schema/errors.ts';
+import {
+    contentEmpty,
+    DistillError,
+    selectorNotFound,
+    unknownError,
+} from '#/schema/errors.ts';
 import type { ExtractInput } from '#/schema/input.ts';
 import { loadCookiesFile } from '#/security/cookies.ts';
 import { validateUrl } from '#/security/url.ts';
@@ -115,6 +125,78 @@ function extractLinks(): Array<{ text: string; href: string; rel?: string }> {
     return [];
 }
 
+// ---------------------------------------------------------------------------
+// Default PageFetcher — routes to cachedFetch or renderWithPlaywright
+// ---------------------------------------------------------------------------
+
+/** Map ExtractInput to the narrow FetchRequest the fetcher needs. */
+function toFetchRequest(input: ExtractInput): FetchRequest {
+    return {
+        render: input.render,
+        headers: parseHeaders(input.header),
+        cookies: input.cookies,
+        userAgent: input.user_agent,
+        timeout: input.timeout,
+        maxSize: parseSize(input.max_size),
+        retries: input.retries,
+        noCache: input.no_cache,
+        refresh: input.refresh,
+        actions: input.actions,
+    };
+}
+
+/** Production PageFetcher that delegates to cachedFetch or renderWithPlaywright. */
+const defaultPageFetcher: PageFetcher = {
+    async fetch(url: URL, request: FetchRequest): Promise<FetchResult> {
+        if (request.render) {
+            const cookies = request.cookies
+                ? await loadCookiesFile(request.cookies)
+                : undefined;
+
+            const renderResult = await renderWithPlaywright(url.href, {
+                headers: request.headers,
+                cookies: cookies?.map((c) => ({
+                    name: c.name,
+                    value: c.value,
+                    domain: c.domain,
+                    path: c.path,
+                })),
+                userAgent: request.userAgent,
+                timeout: request.timeout,
+                actions: request.actions,
+            });
+
+            return {
+                html: renderResult.html,
+                finalUrl: renderResult.finalUrl,
+                httpStatus: renderResult.status ?? 200,
+                fromCache: false,
+                actionTrace: renderResult.actionTrace ?? [],
+            };
+        }
+
+        const fetchOpts: CachedFetchOptions = {
+            headers: request.headers,
+            userAgent: request.userAgent,
+            timeout: request.timeout,
+            maxSize: request.maxSize,
+            retries: request.retries,
+            noCache: request.noCache,
+            refresh: request.refresh,
+        };
+
+        const fetchResult = await cachedFetch(url.href, fetchOpts);
+
+        return {
+            html: fetchResult.body.toString('utf-8'),
+            finalUrl: fetchResult.finalUrl,
+            httpStatus: fetchResult.status,
+            fromCache: fetchResult._meta.from_cache,
+            actionTrace: [],
+        };
+    },
+};
+
 /** Collect unique images from extraction blocks for the +images group. */
 function extractImages(
     blocks: Block[],
@@ -141,6 +223,7 @@ function extractImages(
  */
 export async function runExtract(
     input: ExtractInput,
+    options?: ExtractOptions,
 ): Promise<Record<string, unknown>> {
     const startTime = Date.now();
 
@@ -149,58 +232,18 @@ export async function runExtract(
         allowPrivateNetwork: input.allow_private_network,
     });
 
-    // 2. Fetch (raw HTTP) or render (Playwright) — §2, §5
-    let html: string;
-    let finalUrl: string;
-    let httpStatus: number;
-    let fromCache: boolean;
-    let actionTrace: ActionTraceEntry[] = [];
-
-    if (input.render) {
-        // Playwright render path — never cached (§8)
-        const cookies = input.cookies
-            ? await loadCookiesFile(input.cookies)
-            : undefined;
-
-        const renderResult = await renderWithPlaywright(url.href, {
-            headers: parseHeaders(input.header),
-            cookies: cookies?.map((c) => ({
-                name: c.name,
-                value: c.value,
-                domain: c.domain,
-                path: c.path,
-            })),
-            userAgent: input.user_agent,
-            timeout: input.timeout,
-            actions: input.actions,
-        });
-
-        html = renderResult.html;
-        finalUrl = renderResult.finalUrl;
-        httpStatus = renderResult.status ?? 200;
-        fromCache = false;
-        if (renderResult.actionTrace) {
-            actionTrace = renderResult.actionTrace;
-        }
-    } else {
-        // Raw HTTP path with optional caching
-        const fetchOpts: CachedFetchOptions = {
-            headers: parseHeaders(input.header),
-            userAgent: input.user_agent,
-            timeout: input.timeout,
-            maxSize: parseSize(input.max_size),
-            retries: input.retries,
-            noCache: input.no_cache,
-            refresh: input.refresh,
-        };
-
-        const fetchResult = await cachedFetch(url.href, fetchOpts);
-
-        html = fetchResult.body.toString('utf-8');
-        finalUrl = fetchResult.finalUrl;
-        httpStatus = fetchResult.status;
-        fromCache = fetchResult._meta.from_cache;
+    // 2. Fetch (raw HTTP) or render (Playwright) via PageFetcher
+    const fetcher = options?.fetcher ?? defaultPageFetcher;
+    const request = toFetchRequest(input);
+    let fetchResult: FetchResult;
+    try {
+        fetchResult = await fetcher.fetch(url, request);
+    } catch (err) {
+        if (err instanceof DistillError) throw err;
+        throw unknownError(err instanceof Error ? err.message : String(err));
     }
+
+    const { html, finalUrl, httpStatus, fromCache, actionTrace } = fetchResult;
 
     // 3. Parse HTML via linkedom
     const { document } = parseHTML(html);
